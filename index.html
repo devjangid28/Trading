@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>OrderFlow — Order Blocks, Liquidity & News Impact</title>
+    <meta
+      name="description"
+      content="Live order block, liquidity, market-breadth and news-impact terminal for crypto and Indian markets."
+    />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('of-theme');
+          if (t === 'light') document.documentElement.classList.remove('dark');
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

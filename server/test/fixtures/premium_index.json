@@ -1,0 +1,14 @@
+{
+  "_capturedAt": "2026-10-10T16:04:21.484Z",
+  "_source": "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT",
+  "data": {
+    "symbol": "BTCUSDT",
+    "markPrice": "83008.96524638",
+    "indexPrice": "83045.97500000",
+    "estimatedSettlePrice": "83032.98005930",
+    "lastFundingRate": "0.00000497",
+    "interestRate": "0.00010000",
+    "nextFundingTime": 1791676800000,
+    "time": 1791648261000
+  }
+}

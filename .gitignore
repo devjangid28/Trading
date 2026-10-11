@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.local
+*.log
+.DS_Store
+.vite/
+
+# Runtime artifacts: the signal ledger and the persisted last-good board.
+server/data/orderflow.db
+server/data/orderflow.db-shm
+server/data/orderflow.db-wal
+server/data/scan-cache.json

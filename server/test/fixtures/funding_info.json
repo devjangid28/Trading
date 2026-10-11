@@ -1,0 +1,207 @@
+{
+  "_capturedAt": "2026-10-10T16:04:21.704Z",
+  "_source": "https://fapi.binance.com/fapi/v1/fundingInfo",
+  "sample": [
+    {
+      "symbol": "GTCUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1758377721362
+    },
+    {
+      "symbol": "LPTUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1752854309429
+    },
+    {
+      "symbol": "TRBUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1697703073725
+    },
+    {
+      "symbol": "ARKUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1791478860226
+    },
+    {
+      "symbol": "IMXUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1698143630481
+    },
+    {
+      "symbol": "ENJUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1776506460479
+    },
+    {
+      "symbol": "BICOUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1758343802029
+    },
+    {
+      "symbol": "OGNUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1773486060102
+    },
+    {
+      "symbol": "BNTUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1698143744492
+    },
+    {
+      "symbol": "BTCDOMUSDT",
+      "adjustedFundingRateCap": "0.03000000",
+      "adjustedFundingRateFloor": "-0.03000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1696841455613
+    },
+    {
+      "symbol": "QNTUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1758379312808
+    },
+    {
+      "symbol": "ALGOUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1697618080489
+    },
+    {
+      "symbol": "FLOWUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1768629660101
+    },
+    {
+      "symbol": "1000XECUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1784754060064
+    },
+    {
+      "symbol": "WOOUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1698655968677
+    },
+    {
+      "symbol": "ARUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1698656069779
+    },
+    {
+      "symbol": "ASTRUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1758343741897
+    },
+    {
+      "symbol": "BATUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1698656002450
+    },
+    {
+      "symbol": "ENSUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1699261366757
+    },
+    {
+      "symbol": "SEIUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1698424283078
+    },
+    {
+      "symbol": "CVXUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1753270258730
+    },
+    {
+      "symbol": "RVNUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1752854272084
+    },
+    {
+      "symbol": "JASMYUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1758377912488
+    },
+    {
+      "symbol": "SSVUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 8,
+      "disclaimer": false,
+      "updateTime": 1758702736858
+    },
+    {
+      "symbol": "TUSDT",
+      "adjustedFundingRateCap": "0.02000000",
+      "adjustedFundingRateFloor": "-0.02000000",
+      "fundingIntervalHours": 4,
+      "disclaimer": false,
+      "updateTime": 1789855260614
+    }
+  ],
+  "total": 805
+}

@@ -1,0 +1,54 @@
+{
+  "_readme": "US BLS macro release dates. The BLS schedule page renders its table in JavaScript, so these CANNOT be scraped - the served HTML contains no dates. Everything here was transcribed by hand from https://www.bls.gov/schedule/2026/home.htm opened in a browser. Times are 08:30 America/New_York; the app converts to UTC using the real IANA timezone so DST is handled correctly (DST ends 2026-11-01).",
+  "_dst": "October is EDT (UTC-4) so 08:30 ET = 12:30 UTC = 18:00 IST. From 1 November it is EST (UTC-5) so 08:30 ET = 13:30 UTC = 19:00 IST.",
+  "_schema": {
+    "date": "ISO date",
+    "timeEt": "24h wall-clock in America/New_York",
+    "kind": "CPI | NFP | PPI | PCE | FOMC | FED_SPEECH",
+    "title": "shown in the calendar",
+    "blackout": "true vetoes trades within 30 minutes either side",
+    "source": "how it was verified"
+  },
+  "events": [
+    {
+      "date": "2026-10-14",
+      "timeEt": "08:30",
+      "kind": "CPI",
+      "title": "US CPI (September data)",
+      "blackout": true,
+      "source": "BLS schedule 2026, read manually 10 Oct 2026. CPI was the strongest measured 1h driver of BTC in the 2026 research (R2 ~0.80)."
+    },
+    {
+      "date": "2026-11-06",
+      "timeEt": "08:30",
+      "kind": "NFP",
+      "title": "US Employment Situation (October data)",
+      "blackout": true,
+      "source": "BLS schedule 2026, read manually 10 Oct 2026"
+    },
+    {
+      "date": "2026-11-10",
+      "timeEt": "08:30",
+      "kind": "CPI",
+      "title": "US CPI (October data)",
+      "blackout": true,
+      "source": "BLS schedule 2026, read manually 10 Oct 2026"
+    },
+    {
+      "date": "2026-12-04",
+      "timeEt": "08:30",
+      "kind": "NFP",
+      "title": "US Employment Situation (November data)",
+      "blackout": true,
+      "source": "BLS schedule 2026, read manually 10 Oct 2026"
+    },
+    {
+      "date": "2026-12-10",
+      "timeEt": "08:30",
+      "kind": "CPI",
+      "title": "US CPI (November data)",
+      "blackout": true,
+      "source": "BLS schedule 2026, read manually 10 Oct 2026"
+    }
+  ]
+}

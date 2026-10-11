@@ -1,0 +1,142 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-up: #16a34a;
+  --color-up-soft: #dcfce7;
+  --color-down: #dc2626;
+  --color-down-soft: #fee2e2;
+  --color-accent: #6366f1;
+  --color-amber: #d97706;
+}
+
+@layer base {
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #f1f3f6;
+    --border: #e2e5ea;
+    --text: #10131a;
+    --muted: #6b7280;
+    --faint: #9aa1ac;
+    --grid: #eceef2;
+    --accent: #6366f1;
+  }
+
+  .dark {
+    --bg: #0a0c11;
+    --panel: #12151c;
+    --panel-2: #191d26;
+    --border: #232833;
+    --text: #e6e9ef;
+    --muted: #8b93a1;
+    --faint: #626b7a;
+    --grid: #1d222b;
+    --accent: #818cf8;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Trading terminals are dense; keep scrollbars out of the way. */
+  ::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--faint);
+  }
+}
+
+@layer components {
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mono {
+    font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+
+  .up {
+    color: var(--color-up);
+  }
+  .down {
+    color: var(--color-down);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+}
+
+@keyframes of-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes of-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.live-dot {
+  animation: of-pulse 1.8s ease-in-out infinite;
+}
+
+.of-in {
+  animation: of-in 0.18s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot,
+  .of-in {
+    animation: none;
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "_capturedAt": "2026-10-10T16:04:22.261Z",
+  "coinbasePrice": 82962.02,
+  "binancePrice": 83050.92,
+  "premiumPct": -0.10704276364427291,
+  "note": "Coinbase BTC-USD vs Binance BTCUSDT. USDT is assumed ~1 USD; a real USDT/USD rate would refine this."
+}
