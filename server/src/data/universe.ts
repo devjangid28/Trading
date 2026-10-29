@@ -84,6 +84,27 @@ export const UNIVERSE: UniverseEntry[] = [
 /** Stablecoins are tracked by the macro panel, not the order-block board. */
 export const EXCLUDE_FROM_BOARD = new Set(['USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD']);
 
+/**
+ * Fiat-pegged tokens. These have a 24h quote volume in the billions and would
+ * otherwise dominate the volume cap, so they are dropped before the board is
+ * built. Kept deliberately broader than EXCLUDE_FROM_BOARD.
+ */
+export const STABLECOIN_BASES = new Set([
+  'USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'USDP', 'DAI', 'USDD', 'USDE', 'USD1',
+  'PYUSD', 'GUSD', 'FRAX', 'USDS', 'USDA', 'USDL', 'SUSD', 'MIM', 'LUSD', 'CUSD',
+  'USTC', 'UST', 'VAI', 'USDF', 'USDB', 'USDX', 'USX', 'USDG', 'USDR', 'USDTB',
+  'RLUSD', 'USDY', 'BSCUSD', 'USDL', 'XUSD',
+  'EURI', 'AEUR', 'EURT', 'EURS', 'EUR', 'JPYC', 'GYEN', 'XSGD', 'XIDR',
+  'TRY', 'BIDR', 'IDRT', 'BRL', 'RUB', 'UAH', 'ZAR', 'GBP', 'AUD',
+]);
+
+/** Wrapped / bridged representations of an asset that already trades natively. */
+export const WRAPPED_BASES = new Set([
+  'WBTC', 'WETH', 'WBNB', 'WSTETH', 'WSOL', 'WAVAX', 'WMATIC', 'WPOL', 'BTCB',
+  'WFTM', 'WONE', 'WCRO', 'WHT', 'WROSE', 'WTRX', 'BETH', 'CBBTC', 'WETH_E',
+  'WBTC_E', 'SOLVBTC',
+]);
+
 export const UNIVERSE_BY_BASE = new Map(UNIVERSE.map((u) => [u.base, u]));
 
 export const SECTORS = [

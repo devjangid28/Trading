@@ -16,6 +16,8 @@ async function open(name: string) {
   const ctrl = new AbortController();
   const msgs: Msg[] = [];
   const firstAt = new Map<string, number>();
+  /** Receive-time minus the server timestamp on each tick, ms. */
+  const lat: number[] = [];
   const res = await fetch(`${BASE}/api/stream`, { signal: ctrl.signal });
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
@@ -38,6 +40,7 @@ async function open(name: string) {
           if (msg.type === 'tick') {
             const s = msg.symbol as string;
             if (!firstAt.has(s)) firstAt.set(s, Date.now());
+            lat.push(Date.now() - (msg.ts as number));
           }
         }
       }
@@ -48,6 +51,7 @@ async function open(name: string) {
     name,
     msgs,
     firstAt,
+    lat,
     close: () => ctrl.abort(),
   };
 }
@@ -108,6 +112,19 @@ console.log(`      total ${tickA} ticks across ${perSymbol.size} symbols in ${el
 // Heartbeats present?
 console.log(`${counts(a, 'heartbeat') > 0 ? 'PASS' : 'INFO'}  heartbeats: ${counts(a, 'heartbeat')} (15s interval, ${elapsed.toFixed(0)}s window)`);
 console.log(`${counts(a, 'snapshot') > 0 ? 'PASS' : 'INFO'}  snapshot on connect: ${counts(a, 'snapshot')}`);
+
+// Receive latency: server ts -> browser receive. This is the number that backs
+// the "price change shows within 2s" claim, so report p50/p95 rather than a
+// single sample.
+if (a.lat.length > 0) {
+  const sorted = [...a.lat].sort((x, y) => x - y);
+  const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+  const p50 = pick(0.5);
+  const p95 = pick(0.95);
+  console.log(`${p95 < 2000 ? 'PASS' : 'FAIL'}  receive latency p50 ${p50}ms / p95 ${p95}ms over ${a.lat.length} ticks (<2000ms)`);
+} else {
+  console.log('INFO  no ticks available for a latency percentile in the window');
+}
 
 console.log('\n--- killing client A, B must survive ---');
 a.close();

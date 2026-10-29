@@ -26,13 +26,30 @@ export const DEFAULT_PLAN_OPTIONS: PlanOptions = {
   holdingHours: RISK.EXPECTED_HOLD_HOURS,
 };
 
+/**
+ * @param opts **Deliberately has no default.** A position size computed against
+ *   an account balance nobody chose is a fabricated number, and this repo's
+ *   second house rule forbids exactly that. Until a caller supplies a real
+ *   account size, `qty`/`riskAmount`/`rewardAmount` stay `null` and the UI shows
+ *   a dash. The board therefore publishes `riskPerUnit` — which is *measured* —
+ *   and never a share of an invented account.
+ *
+ *   Before Part XV this defaulted to `DEFAULT_PLAN_OPTIONS`, which meant every
+ *   board row silently published a size sized against $100,000. Nothing in the
+ *   codebase ever changed it.
+ *
+ * @param deriv Real derivatives, so `buildCosts` can charge real funding and
+ *   real spread. Omitting it made funding 0 bps and slippage a flat default on
+ *   every row, which understated costs and therefore flattered `netExpectedR`
+ *   and the actionability gate that reads it.
+ */
 export function buildPlan(
   symbol: string,
   side: Side,
   setup: Setup,
   price: number,
   atrPct: number,
-  opts: PlanOptions = DEFAULT_PLAN_OPTIONS,
+  opts?: PlanOptions,
   deriv: DerivRow | null = null,
 ): TradePlan {
   const atr = (atrPct / 100) * price;
@@ -49,36 +66,56 @@ export function buildPlan(
   const riskPerUnit = Math.abs(entryMid - stop);
 
   // Targets come from real liquidity levels only.
+  //
+  // `netR` is per target, not just for the last one: a plan that quotes a gross
+  // R for R1 and a net R for R3 is comparing two different quantities, and the
+  // whole point of quoting costs is to see the difference. Added by Fix 4 after
+  // the oracle comparison found the headline `netR` covered only the furthest
+  // target.
   const targets = setup.targets.map((t) => {
     const reward = Math.abs(t.price - entryMid);
-    return {
-      label: t.label,
-      price: t.price,
-      rr: riskPerUnit > 0 ? reward / riskPerUnit : 0,
-    };
+    const rr = riskPerUnit > 0 ? reward / riskPerUnit : 0;
+    return { label: t.label, price: t.price, rr, netR: 0 };
   });
 
   const noRoom = targets.length === 0;
   const rr = targets.length ? (targets[targets.length - 1].rr || 0) : 0;
 
   // Position sizing: risk amount divided by per-unit risk.
-  const riskAmount = (opts.accountSize * opts.riskPct) / 100;
-  const qty = riskPerUnit > 0 ? riskAmount / riskPerUnit : null;
+  //
+  // `null` unless the caller supplied a real account size. The board supplies
+  // none, so board rows publish `riskPerUnit` (measured) and not a fabricated
+  // share of an account nobody chose. Part XV.
+  const riskAmount = opts ? (opts.accountSize * opts.riskPct) / 100 : null;
+  const qty = riskAmount !== null && riskPerUnit > 0 ? riskAmount / riskPerUnit : null;
 
-  const costs = buildCosts(entryMid, qty, opts, deriv, side);
+  // `holdingHours` is an analytical assumption tagged `[TUNED]` in config, not a
+  // number the user supplied, so it falls back to the config default when no
+  // options object exists. The ACCOUNT size does not fall back, for the reason
+  // above.
+  const costs = buildCosts(entryMid, qty, opts ?? DEFAULT_PLAN_OPTIONS, deriv, side);
   const rewardAmount = qty !== null && targets.length
     ? Math.abs(targets[targets.length - 1].price - entryMid) * qty
     : null;
 
-  // Net R after costs â€” the number that actually matters.
+  // Net R after costs — the number that actually matters.
   //
   // Net R is gross R minus costs expressed in R. It previously read
   // `(gross R - cost R) - 1`, which subtracted a whole extra R and made every
   // plan look one R worse than it is: a 2R trade displayed as ~1R. There is no
-  // reason to subtract a further R here â€” the 1R at risk is already the
+  // reason to subtract a further R here — the 1R at risk is already the
   // denominator.
-  const costR = (costs.totalBps / 10_000 * entryMid) / riskPerUnit;
-  const netR = qty !== null && riskPerUnit > 0 ? rr - costR : null;
+  //
+  // Part XV: this used to be gated on `qty !== null`, which meant "no position
+  // size" also erased "net R" — two unrelated unknowns collapsed into one. Cost
+  // in R needs only the cost in bps and the per-unit risk, both of which are
+  // measured without an account size. Decoupling them keeps `netExpectedR`, and
+  // therefore the actionability gate, meaningful on the board.
+  const costR = riskPerUnit > 0 ? (costs.totalBps / 10_000 * entryMid) / riskPerUnit : 0;
+  const netR = riskPerUnit > 0 ? rr - costR : null;
+
+  // Fill in the per-target net R now that the cost is known.
+  for (const t of targets) t.netR = riskPerUnit > 0 ? t.rr - costR : 0;
 
   return {
     symbol,
@@ -123,14 +160,24 @@ function buildCosts(
 
   void side;
 
+  // NOT rounded.
+  //
+  // These used to be rounded to one decimal place before being summed, which
+  // meant a 0.046bps funding rate was rounded to 0 and then cost nothing. The
+  // error is small in absolute terms but it is a display decision leaking into
+  // a calculation, and it made buildPlan disagree with an independent oracle
+  // recomputing the same figure from the same definitions. Formatting is the
+  // UI's job; the engine returns the number it actually used.
+  const totalBps = feeBps + fundingBps + slippageBps;
+
   return {
     feeBps,
     feeAmount,
-    fundingBps: Math.round(fundingBps * 10) / 10,
+    fundingBps,
     fundingAmount,
     slippageBps,
     slippageAmount,
-    totalBps: Math.round((feeBps + fundingBps + slippageBps) * 10) / 10,
+    totalBps,
   };
 }
 

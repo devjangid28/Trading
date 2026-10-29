@@ -2,6 +2,7 @@ import { fetchJson, fetchJsonSafe } from '../lib/http.js';
 import { cached } from '../lib/cache.js';
 import type { MacroState } from '../../../shared/types';
 import { fetchTickers } from './binance.js';
+import { geckoGlobal } from './coingecko.js';
 import { yahooChartCached } from './yahoo.js';
 
 
@@ -99,24 +100,8 @@ async function stablecoins(): Promise<MacroState['stablecoins']> {
   };
 }
 
-interface GeckoGlobal {
-  data: {
-    total_market_cap: { usd: number };
-    total_volume: { usd: number };
-    market_cap_percentage: { btc: number; eth: number };
-    market_cap_change_percentage_24h_usd: number;
-    active_cryptocurrencies: number;
-  };
-}
-
 export async function globalMarket(): Promise<MacroState['globalMarket']> {
-  const key = process.env.COINGECKO_DEMO_KEY;
-  const headers: Record<string, string> = key ? { 'x-cg-demo-api-key': key } : {};
-  const res = await fetchJson<GeckoGlobal>('https://api.coingecko.com/api/v3/global', {
-    label: 'coingecko global',
-    retries: 1,
-    headers,
-  });
+  const res = await geckoGlobal();
   const d = res.data;
   return {
     totalMarketCapUsd: Math.round(d.total_market_cap.usd),

@@ -1,25 +1,51 @@
 import { useEffect, type ReactNode } from 'react';
-import type { Candle, AssetRow, Setup } from '../../shared/types';
-import { useLazy } from '../lib/api';
+import type { Conviction, Setup, Side, TradePlan } from '../../shared/types';
+import { useAssetDetail } from '../lib/api';
 import { fmtPct, fmtPrice } from '../lib/format';
 import { CandleChart } from './CandleChart';
 import { ChecklistPanel } from './signalChips';
 import { Chip, Spinner } from './ui';
 
-export interface AssetDetail {
-  id: string;
-  pair: string;
-  name: string;
-  sector: string;
-  candles: Candle[];
-  setup: Setup | null;
-  side: 'bullish' | 'bearish';
-  choppiness: number;
-  strength: number;
-  rangePct: number;
-  changePct: number;
-  price: number;
-  updatedAt: number;
+/**
+ * The board row the popup was opened from, reduced to what it actually reads.
+ *
+ * Declared as a subset rather than `AssetRow` on purpose. The popup is mounted
+ * from three surfaces - the board, the Signals tab and the Radar tab - and the
+ * last two hold their own row shapes that are not full `AssetRow`s. Typing the
+ * prop as `AssetRow` is what pushed those two to `row={null}` in the first
+ * place, which silently cost the popup its VWAP, its board rank and its
+ * conviction checklist. Every field is optional, so a caller that has a value
+ * passes it and a caller that does not says so instead of pretending.
+ */
+export interface PopupRow {
+  side?: Side;
+  price?: number;
+  changePct?: number;
+  vwap?: number | null;
+  /** Position on the scan board, 1-based. Absent => not a board row. */
+  rank?: number | null;
+  name?: string;
+  sector?: string;
+  setup?: Setup | null;
+  conviction?: Conviction | null;
+  plan?: TradePlan | null;
+}
+
+/**
+ * One alignment point, in three states.
+ *
+ * `unknown` is not `fail`. A point that could not be measured - no board rank on
+ * the Radar tab, no sector peers in view - is not evidence against the setup,
+ * and scoring it as a failure would make the verdict a statement the engine
+ * never made. It is shown as not measured and counted separately.
+ */
+type CheckState = 'pass' | 'fail' | 'unknown';
+
+interface AlignmentCheckItem {
+  label: string;
+  state: CheckState;
+  /** Why it could not be measured, shown on the tick itself. */
+  detail?: string;
 }
 
 function Row({
@@ -45,39 +71,48 @@ function Row({
   );
 }
 
-/** The four-point alignment check: how much of the context agrees with the setup. */
-function AlignmentCheck({
-  checks,
-}: {
-  checks: { label: string; ok: boolean }[];
-}) {
-  const score = checks.filter((c) => c.ok).length;
+/**
+ * The four-point alignment check: how much of the context agrees with the setup.
+ *
+ * The header counts only measured points. If any point could not be measured it
+ * says how many, so `2/4` is never quietly read as `2 of 4 failed` when two of
+ * them were never asked.
+ */
+function AlignmentCheck({ checks }: { checks: AlignmentCheckItem[] }) {
+  const passed = checks.filter((c) => c.state === 'pass').length;
+  const unknown = checks.filter((c) => c.state === 'unknown').length;
   const color =
-    score >= 4 ? 'var(--color-up)' : score === 3 ? 'var(--color-amber)' : 'var(--color-down)';
+    passed >= 4 ? 'var(--color-up)' : passed === 3 ? 'var(--color-amber)' : 'var(--color-down)';
   const verdict =
-    score >= 4 ? 'Full attention' : score === 3 ? 'Workable, size down' : 'Usually a pass';
+    passed >= 4 ? 'Full attention' : passed === 3 ? 'Workable, size down' : 'Usually a pass';
   return (
     <div className="px-3 py-2 rounded-lg" style={{ background: 'var(--panel-2)' }}>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] font-semibold" style={{ color: 'var(--muted)' }}>
           Alignment check
         </span>
         <span className="text-[11px] font-bold" style={{ color }}>
-          {score}/4 · {verdict}
+          {passed}/{checks.length} · {verdict}
+          {unknown > 0 && (
+            <span style={{ color: 'var(--faint)' }}>{` · ${unknown} not measured`}</span>
+          )}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-1 mt-1.5">
         {checks.map((c) => (
           <span key={c.label} className="text-[10.5px] flex items-center gap-1.5">
             <span
+              title={c.detail}
               style={{
-                color: c.ok ? 'var(--color-up)' : 'var(--faint)',
+                color: c.state === 'pass' ? 'var(--color-up)' : 'var(--faint)',
                 fontWeight: 700,
               }}
             >
-              {c.ok ? '✓' : '✕'}
+              {c.state === 'pass' ? '✓' : c.state === 'fail' ? '✕' : '—'}
             </span>
-            <span style={{ color: c.ok ? 'var(--text)' : 'var(--faint)' }}>{c.label}</span>
+            <span style={{ color: c.state === 'unknown' ? 'var(--faint)' : 'var(--text)' }}>
+              {c.label}
+            </span>
           </span>
         ))}
       </div>
@@ -85,26 +120,43 @@ function AlignmentCheck({
   );
 }
 
+/**
+ * Which VWAP the popup draws, and why.
+ *
+ * `/api/asset/:id` is the primary source: it carries the session VWAP over the
+ * very candles the chart draws and it is present on every surface that opens
+ * this popup. The board row is only the pre-fetch fallback, so the line is on
+ * screen immediately instead of blinking out while the detail request is in
+ * flight.
+ *
+ * It used to be `row?.vwap ?? null` with nothing else - so a popup opened from a
+ * surface without a board row (Signals, Radar) showed `n/a` and failed its own
+ * VWAP alignment tick while the board displayed the same coin's number.
+ * Exported so the precedence is pinned by a test rather than by a screenshot.
+ */
+export function resolveVwap(
+  detail: { vwap?: number | null } | null | undefined,
+  row: { vwap?: number | null } | null | undefined,
+): number | null {
+  return detail?.vwap ?? row?.vwap ?? null;
+}
+
 export function AssetPopup({
   assetId,
   row,
   breadthBias,
   sectorAvgChange,
+  volumeProfile,
   onClose,
 }: {
   assetId: string;
-  row: AssetRow | null;
+  row: PopupRow | null;
   breadthBias: 'bullish' | 'bearish' | 'two-way';
   sectorAvgChange: number | null;
+  volumeProfile?: { poc: number; vah: number; val: number } | null;
   onClose: () => void;
 }) {
-  const { data, error, loading } = useLazy<AssetDetail>(
-    (s) => fetch(`/api/asset/${assetId}`, { signal: s }).then((r) => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    }),
-    !!assetId,
-  );
+  const { data, error, loading } = useAssetDetail(assetId);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -118,21 +170,45 @@ export function AssetPopup({
   const bullish = (data?.side ?? row?.side) === 'bullish';
   const color = bullish ? 'var(--color-up)' : 'var(--color-down)';
   const price = data?.price ?? row?.price ?? 0;
-  const vwap = row?.vwap ?? null;
 
-  const checks = [
-    { label: 'Top of its board', ok: !!row && row.rank <= 20 },
+  /**
+   * The fetched detail wins; the board row is the pre-fetch fallback. See
+   * `resolveVwap`.
+   */
+  const vwap = resolveVwap(data, row);
+
+  const checks: AlignmentCheckItem[] = [
+    {
+      label: 'Top of its board',
+      state: typeof row?.rank === 'number' ? (row.rank <= 20 ? 'pass' : 'fail') : 'unknown',
+      detail:
+        typeof row?.rank === 'number'
+          ? `rank ${row.rank} of the scan board`
+          : 'not a board row in this view',
+    },
     {
       label: 'Sector leans same way',
-      ok: sectorAvgChange !== null && (bullish ? sectorAvgChange >= 0 : sectorAvgChange <= 0),
+      state:
+        sectorAvgChange === null
+          ? 'unknown'
+          : bullish === (sectorAvgChange >= 0)
+            ? 'pass'
+            : 'fail',
+      detail:
+        sectorAvgChange === null
+          ? 'no peers in view'
+          : `sector average ${sectorAvgChange >= 0 ? '+' : ''}${sectorAvgChange.toFixed(2)}%`,
     },
     {
       label: 'Breadth leans same way',
-      ok: breadthBias === (bullish ? 'bullish' : 'bearish'),
+      // Two-way breadth genuinely does not lean, so it fails rather than hiding.
+      state: breadthBias === (bullish ? 'bullish' : 'bearish') ? 'pass' : 'fail',
+      detail: `market breadth is ${breadthBias}`,
     },
     {
       label: bullish ? 'Price above VWAP' : 'Price below VWAP',
-      ok: !!vwap && ((bullish && price > vwap) || (!bullish && price < vwap)),
+      state: !vwap ? 'unknown' : bullish === (price > vwap) ? 'pass' : 'fail',
+      detail: vwap ? `session VWAP ${fmtPrice(vwap)}` : 'no session VWAP for this window',
     },
   ];
 
@@ -181,7 +257,7 @@ export function AssetPopup({
           <div className="p-3 space-y-3">
             {data.candles.length > 0 ? (
               <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
-                <CandleChart candles={data.candles} setup={setup} vwap={vwap ?? null} height={300} />
+                <CandleChart candles={data.candles} setup={setup} vwap={vwap} height={300} volumeProfile={volumeProfile ?? null} />
               </div>
             ) : (
               <div className="p-6 text-center text-[12px]" style={{ color: 'var(--muted)' }}>

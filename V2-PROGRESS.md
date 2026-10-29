@@ -2,7 +2,7 @@
 
 **Status: Phases 0–3 complete and verified against live data. Phases 4–11 not started.**
 
-Last verified: 10 Oct 2026, 15:55 UTC from this machine.
+Last verified: 12 Oct 2026 (live API; Stages 3–5 all verified live).
 Run: `npm install && npm run dev` → http://localhost:5173
 
 ---
@@ -411,12 +411,111 @@ its own context via `enrichContext()`.
 - Calendar and blackout mode (`blackedOut` still always false)
 - `fit-weights` script (correctly — needs 200+ resolved signals)
 
+---
+
+# Update: 14 Oct 2026 - M1.1, the chart draws real candles
+
+Milestone 1 of `order block/docs/IMPLEMENTATION_ROADMAP.md`. Full detail in `CONTEXT.md` Part X.
+
+## The bug that mattered
+
+`TicketPanel.tsx` was drawing **fabricated candlesticks**. `AssetRow.spark` is a close-only series,
+and the chart turned it into OHLC with `open = previous close` and
+`high/low = max/min of two closes`. Every wick was an invented intrabar extreme. It rendered as a
+perfectly plausible chart.
+
+`CandleChart` - the real OHLCV chart, already written - was **never mounted anywhere**, because its
+only render site `AssetPopup` was imported by nothing.
+
+Both fixed. The ticket now draws real candles from `GET /api/asset/:id`, says "Loading 5m candles..."
+while they arrive, and says "Chart unavailable - <reason>" when they cannot. It never falls back to
+drawn geometry. A "Full chart" button opens the popup above every tab.
+
+## Also fixed
+
+| Bug | Where |
+|---|---|
+| `axisPct(-3.21)` rendered `−-3.2%` (double minus: `toFixed`'s own hyphen plus U+2212) | `src/components/chartMath.ts` |
+| Rules-of-hooks violation: `if (!setup) return null` sat **above** hook calls, so switching between a setup-less and a setup row would change the hook count and crash React | `src/components/TicketPanel.tsx` |
+| `useLazy` keyed only on `enabled`, so swapping symbol A -> B kept showing A | `src/lib/api.ts` |
+| `AssetDetail` owned by a component; two surfaces now share one owner | moved to `src/lib/api.ts` |
+| Chart `<svg>` had no `role`/`aria-label` | `CandleChart.tsx` |
+
+## Verified (real output)
+
+```
+npm run typecheck   clean
+npm test            19 files, 394 passed (was 377, +17)
+npm run build       built in 965ms
+qa/chart.spec.ts    3 passed (desktop)
+```
+
+The +17 are `server/test/chartMath.test.ts` - the chart helpers had **no tests at all**.
+
+## Not a regression
+
+Full Playwright: **11 failed / 65 passed**. Proven pre-existing: reverting the six changed source
+files to the git index and re-running `qa/home.spec.ts` gives the **identical 11 failures**
+(36 passed). They are Home-dashboard layout/mobile/contrast items, untouched here.
+
+## Still the bigger problems
+
+M1.1 was the visible half of M1. The dangerous half is untouched:
+
+- `fundingZ: 0` still renders as `z=0.00` (**M1.4**)
+- board rows still report **zero liquidations** under a live-looking `Meta` (**M1.4**)
+- `rMultipleOf()` still inflates every ledger statistic (**M3.2**)
+- no timeframe selector, no volume, no indicators, no alerts, no auth (**M1.2 / M2 / M4**)
+
 ## Commands
 
 ```bash
-npm run verify         # typecheck + 92 tests
+npm run verify         # typecheck + tests
 npm run fixtures       # re-capture live fixtures
 npm run verify:ledger  # replay real candles through the resolver
+npm run verify:truth   # SSE prices vs Binance REST + per-value timestamps
+npm run verify:stage1  # two clients, throttle, receive-latency p50/p95
 npm run probe          # re-run the source probe
 npm run dev            # http://localhost:5173
 ```
+
+---
+
+# Addendum — 12 Oct 2026: live prices made verifiable
+
+This pass did not add features so much as remove the ways the UI could look
+right and be wrong. Score weights, ledger rules and the closed-candle zone rule
+were **not** touched.
+
+## What was actually wrong (audit first, then fix)
+
+| Suspect | Evidence | Fixed |
+|---|---|---|
+| Every price came from the 60s poll, so the board was up to a minute stale and the pill still said **LIVE 24/7** | `usePolling(scan, 60_000)`; scan rows carried a 60s-old `changePct`; no per-value timestamp anywhere | `src/lib/priceStore.ts` — an external store fed by SSE ticks; per-symbol `useSyncExternalStore` subscriptions; each value carries its own `at` |
+| One tick re-rendered the whole app (~40 rows + shell) | React DevTools profile; `App` render count scaled with tick rate | Prices now live outside React state. `qa/render-count.spec.ts` injects 2,000 ticks and asserts `window.__ofAppRenders ≤ 5` |
+| Hydrated scan rows had no freshness of their own — a row the exchange had stopped ticking still stood as if live | Rows only had panel-level freshness | `ValueAge` tags each row from `live.at ?? row.updatedAt`, shown only when not LIVE; STALE is never rendered as LIVE |
+| The header never said whether it was LIVE, MOCK, BANNED or OFFLINE | Mode existed only in scattered banners | Persistent `ModeBadge` + mode-aware home pill; the "24/7" claim is only made when actually live |
+| The SSE pushed ~150 symbols to every client every second, but only the board is rendered | `/api/stream` ignored who was listening | `POST /api/stream/visible` narrows each client to `MAX_VISIBLE_SYMBOLS_PER_CLIENT` (200); `/api/health.live` reports `filteredClients` |
+| No way to find a coin that was not on today's board | — | `GET /api/search` over the tracked universe, with live price/change/age attached; `GlobalSearch` in the header |
+
+## New verification
+
+- `npm run verify:truth` compares the SSE price for a sample of symbols against
+  Binance's own REST ticker, checks every tick's `ts` is close to receive time,
+  checks timestamps advance, and checks `/api/search` returns the same live price
+  the stream carries. Last run (live): **8/8 within 0.5% (worst 0.009%)**,
+  newest tick **≤8ms** old at receive, search Δ **0.000%**.
+- `npm run verify:stage1` now also reports **receive latency p50/p95**. Last run:
+  **p50 4ms / p95 5ms**, two concurrent clients both tick, throttle holds at
+  1 tick/sec/symbol.
+- Browser regressions in `qa/`: `search.spec.ts` (global search), plus the
+  existing `render-count.spec.ts` and `live-loop.spec.ts`.
+
+## Honest limits (unchanged, now stated in the UI)
+
+- Freshness is **feed-bounded ~1s**: the server flushes ticks once a second, so
+  LIVE means "within the last flush", not tick-by-tick.
+- **One venue.** Prices are Binance spot; the app says so and does not present a
+  composite as if it were one market.
+- `STALE` is never shown as `LIVE`, and a value with no tick yet shows a dash,
+  never an invented number.

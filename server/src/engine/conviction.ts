@@ -7,6 +7,7 @@ import { CONVICTION, VETO } from '../config.js';
 import { fundingCrowdedAgainst, quadrantScore } from './derivatives.js';
 import { cvdDivergence } from '../live/marketState.js';
 import type { Unlock } from '../../../shared/types';
+import { isUnavailable } from '../../../shared/types';
 
 /**
  * Phase 4 â€” conviction.
@@ -187,7 +188,17 @@ function positioningScore(i: ConvictionInput): Scored {
     }
   }
 
-  if (Math.abs(d.fundingZ) > 2.5) {
+  /**
+   * `fundingZ` is null until a funding history is collected. It was a
+   * hardcoded 0, so `Math.abs(0) > 2.5` was never true and this penalty had
+   * never fired in production — silently, because nothing recorded that the
+   * input was absent. A missing input is now skipped *and said out loud*. The
+   * score is unchanged: a null skips exactly as a 0 did, so the frozen
+   * `[TUNED]` weights are not disturbed.
+   */
+  if (d.fundingZ === null) {
+    reasons.push('funding z-score not computed (no funding history) - stretch penalty not applied');
+  } else if (Math.abs(d.fundingZ) > 2.5) {
     pts -= max * 0.2;
     reasons.push(`funding z-score ${d.fundingZ.toFixed(1)} - stretched`);
   }
@@ -205,7 +216,15 @@ function positioningScore(i: ConvictionInput): Scored {
     }
   }
 
-  if (d.liq.cascade) {
+  /**
+   * Board rows carry no liquidation feed, so this used to read a hardcoded
+   * zero bucket whose `cascade` flag was permanently false — the penalty had
+   * never fired and the reason was invisible. Now the absence is explicit and
+   * recorded. The score is unchanged, for the same reason as above.
+   */
+  if (isUnavailable(d.liq)) {
+    reasons.push('no liquidation feed on this path - cascade penalty not applied');
+  } else if (d.liq.cascade) {
     const adverse = i.side === 'bullish' ? d.liq.longM5 : d.liq.shortM5;
     if (adverse > 0) {
       pts -= max * 0.4;

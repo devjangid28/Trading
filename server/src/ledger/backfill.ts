@@ -120,7 +120,7 @@ export async function backfillOnStartup(now = Date.now()): Promise<BackfillRepor
       }
     }
 
-    const bars = candles.map((c) => ({ h: c.h, l: c.l, c: c.c, t: c.t }));
+      const bars = candles.map((c) => ({ h: c.h, l: c.l, c: c.c, t: c.t, o: c.o }));
     for (const row of rows) {
       const res = resolveOutcome({
         side: row.side,

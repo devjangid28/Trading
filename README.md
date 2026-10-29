@@ -137,6 +137,48 @@ reverse over the following four hours even as equities do not.
 The **same engine** runs over liquid NSE F&O stocks. NSE indices, live session state and the
 official holiday calendar come from NSE's keyless endpoints.
 
+### 8. The Engine Lab
+
+A dedicated tab where the engine is **tested, trained and supervised**: observe → decide →
+execute in paper or Binance **testnet** → review every outcome → retrain in controlled batches →
+promote only if a challenger beats the champion out-of-sample.
+
+It reports what the evidence supports, not what would look good. A confidence tier below the
+sample floor quotes **no hit rate** and says how many trades it has and what the floor is; the
+calibration panel shows the Brier score **against the constant base rate**; and the promotion block
+lists, in words, everything that is still missing — including the operator's manual approval, which
+is always required because **the engine cannot promote itself**.
+
+**Real-money execution is not built.** The modes are SHADOW, PAPER and TESTNET. There is no live
+adapter, no key handling and no configuration that turns one on.
+
+TradingView is used for **viewing only**. Its paper-trading account is a manual UI simulator with
+no public order-placement API, so the Lab exposes an outbound alert-style JSON message to paste
+into a TradingView alert or a chart note. Nothing is sent anywhere by this app.
+
+### 9. Crypto chart terminal
+
+The **Charts** tab is a live Binance spot chart workspace, separate from the scanner and the
+heatmap:
+
+- **Feed:** Binance REST klines and ticker plus a combined kline/trade/bookTicker WebSocket. The
+  chart talks to Binance directly, so it is independent of the server's `MOCK` mode and the global
+  `MOCK` badge does not describe the chart feed.
+- **Timeframes:** `1m | 5m | 15m | 30m | 1h | 4h | 1D`; 1,500 bars retained, closed candles only.
+- **Views:** Candles, Heikin Ashi, Line and Area; linear, logarithmic and percentage scales.
+- **Indicators:** EMA, SMA, RSI, MACD, Bollinger Bands, Volume and VWAP. Main-pane overlays and
+  separate RSI/MACD/Volume panes.
+- **Drawings:** trend line, horizontal ray, horizontal line, rectangle, Fibonacci retracement,
+  long position, short position and text note, plus a clear-all action.
+- **Context:** London and New York session bands, visible-range volume/delta/CVD/POC, crosshair
+  OHLC readout, live price flash, bid/ask/spread, feed latency and REST timestamp.
+- **Persistence:** chart settings survive reload under `of-charts-settings-v1`; the selected
+  symbol survives under `of-terminal-symbol`.
+
+If Binance is geo-blocked, the chart shows a feed error while the rest of the app can keep using
+the server's configured source. The data layer exposes a `MarketDataSource` interface so another
+venue can be substituted in `src/lib/binance.ts`.
+
 ---
 
 ## API
@@ -144,6 +186,9 @@ official holiday calendar come from NSE's keyless endpoints.
 | Endpoint | Returns |
 |---|---|
 | `GET /api/scan` | Both boards, sector flow, market picture, breadth |
+| `GET /api/stream` | SSE: `snapshot`, `tick`, `scan` (accepts `?cid=` and `?symbols=`) |
+| `POST /api/stream/visible` | Narrows one client's tick subscription to the symbols it renders |
+| `GET /api/search?q=` | Tracked universe search with live price, change and age attached |
 | `GET /api/asset/:id` | Candles + setup for `BTC`, `BTCUSDT` or `RELIANCE` |
 | `GET /api/news` | Scored news feed with severity buckets |
 | `GET /api/attribution` | Attribution for every coin currently on the board |
@@ -151,6 +196,16 @@ official holiday calendar come from NSE's keyless endpoints.
 | `GET /api/macro` | Fear & Greed, stablecoin float, dominance, India gauges |
 | `GET /api/india` | NSE indices, session state, holidays, F&O strength board |
 | `GET /api/health` | Liveness, IST clock, cache stats |
+| `GET /api/lab/overview` | The whole Engine Lab page: status, decisions, account, reviews, learning, calibration |
+| `GET /api/lab/status` | Mode, model version, drift monitor, kill switch, daily-loss halt |
+| `GET /api/lab/decisions` | What the engine is considering right now, with P(win) and its interval |
+| `GET /api/lab/account` | Equity curve, open positions, fills with modelled costs labelled |
+| `GET /api/lab/reviews` | Every resolved trade with its failure classification and the reason |
+| `GET /api/lab/learning` | Model versions, walk-forward folds, promotions, rejections, rollbacks |
+| `GET /api/lab/calibration` | Reliability, confidence tiers with Wilson intervals, Brier, log loss |
+| `GET /api/lab/alert-message` | The optional outbound TradingView-style JSON to paste |
+| `POST /api/lab/controls` | Start/stop, kill switch, shadow-only, mode, rollback, retrain |
+
 
 ---
 
@@ -159,6 +214,7 @@ official holiday calendar come from NSE's keyless endpoints.
 | Data | Source |
 |---|---|
 | Crypto OHLCV + tickers | Binance public REST (`data-api.binance.vision`) |
+| Crypto chart OHLCV + live feed | Binance public REST (`api.binance.com`) and WebSocket (`stream.binance.com:9443`) |
 | Indian equities | Yahoo Finance chart API |
 | Indian indices, session, holidays | NSE `allIndices`, `marketStatus`, `holiday-master` |
 | Market cap, dominance | CoinGecko |
@@ -184,6 +240,76 @@ deliberately not attempted here rather than faked.
   to be directionally right, not enough to be a published study.
 - News scoring is hand-tuned. It is defensible, but it is not calibrated against labelled
   outcomes yet.
+- **The chart feed is direct from Binance and may be geo-blocked.** It bypasses the server's
+  `MOCK` fixture path, so in MOCK mode the chart can still be live. Swap `MarketDataSource` in
+  `src/lib/binance.ts` if the venue is unreachable.
+- **The chart is not a Tradfye pixel/animation clone.** The reference terminal is behind a
+  private-beta access code; the layout and behaviour follow the written specification.
+- **The chart bundle is large.** klinecharts plus the chart workspace push the production JS chunk
+  to `719.88 kB` (`211.41 kB` gzip), above Vite's 500 kB warning. No code-splitting yet.
+
+---
+
+## Running it always-on (the signal ledger needs uptime)
+
+The ledger only records while the app is running. A server that is stopped records nothing, so the
+supervised launcher is the supported way to run it between CPI, FOMC and PCE prints.
+
+```bash
+npm run start:forever
+```
+
+That runs `server/scripts/supervisor.ts`, which restarts the server on exit with crash-loop
+backoff (a run that dies in under 60s doubles the wait, capped at 5 minutes), rotates
+`data/logs/orderflow.log` at 5MB keeping 5 files, and takes a single-instance lock at
+`data/orderflow.lock`.
+
+**A second launch refuses to start** and names the process holding the lock:
+
+```
+REFUSING TO START — another OrderFlow instance is already running.
+another OrderFlow instance is already running: PID 9700 on 127.0.0.1:8787 (orderflow-api),
+started 2026-10-11T14:51:46.990Z, up 2m23s. Two servers would double the Binance request
+weight, which is how the original 418 happened.
+```
+
+### Start on login (Windows, Task Scheduler)
+
+Run PowerShell as your normal user. Task Scheduler is the Windows-native answer to "start on
+login unattended"; pm2 was rejected because its Windows daemon/`startup` flow is the fragile part
+and it would be a machine-wide install the repo does not carry.
+
+```powershell
+$repo = 'C:\Users\DK\Desktop\trading'
+$action = New-ScheduledTaskAction `
+  -Execute 'cmd.exe' `
+  -Argument "/c cd /d `"$repo`" && npm run start:forever >> `"$repo\data\logs\task.log`" 2>&1" `
+  -WorkingDirectory $repo
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+  -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::MaxValue)
+Register-ScheduledTask -TaskName 'OrderFlow' -Action $action -Trigger $trigger -Settings $settings `
+  -Description 'OrderFlow always-on signal ledger' -RunLevel Limited
+Start-ScheduledTask -TaskName 'OrderFlow'
+```
+
+To remove it: `Unregister-ScheduledTask -TaskName 'OrderFlow' -Confirm:$false`.
+
+On Linux/macOS use the same wrapper under systemd or `pm2 startup`; nothing in the supervisor is
+Windows-specific.
+
+### After downtime
+
+Sleep, crash and event-loop stalls are detected and recorded as gaps in the `gaps` table, then
+backfilled. `GET /api/health` reports what that cost:
+
+- `supervision.gaps7d` — gap count and total minutes over 7 days
+- `supervision.downtimeMinutes7d` — recorded process-level downtime
+- `supervision.restarts24h` — launches in the trailing 24 hours
+- `supervision.coverage` — **read this before quoting any win rate.** It states the real sample
+  coverage: signals that already existed and hit a level during the hole are recovered by
+  backfill, but signals that would have been *created* during the hole (A/B picks, grade-C
+  shadows, vetoed coins) have no row to recover and are permanently absent.
 
 ---
 

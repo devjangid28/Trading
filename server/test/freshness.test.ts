@@ -22,12 +22,36 @@ describe('freshness thresholds', () => {
   it('STALE is further out than DELAYED', () => {
     expect(LIVE.STALE_AFTER_MS).toBeGreaterThan(LIVE.DELAYED_AFTER_MS);
   });
+
+  it('the LIVE window is seconds wide, not minutes', () => {
+    // This is a regression guard with teeth.
+    //
+    // The thresholds were 90_000 / 240_000, which were correct for a 60s board
+    // scan and wrong for a price: an 85-second-old price rendered a green LIVE
+    // badge. The house rule is "STALE is never rendered as LIVE", and an
+    // over-generous constant breaks it exactly as effectively as a wrong one.
+    //
+    // The window must also be several flush intervals wide, or a single dropped
+    // frame would flicker the badge off LIVE.
+    expect(LIVE.DELAYED_AFTER_MS).toBeGreaterThanOrEqual(SERVER_LIVE.TICK_PUSH_MS * 5);
+    expect(LIVE.DELAYED_AFTER_MS).toBeLessThanOrEqual(10_000);
+    expect(LIVE.STALE_AFTER_MS).toBeLessThanOrEqual(30_000);
+  });
 });
 
 describe('freshnessOf', () => {
-  it('treats a fresh reading as LIVE', () => {
+  it('treats a reading inside the push cadence as LIVE', () => {
     expect(freshnessOf(0)).toBe('LIVE');
-    expect(freshnessOf(5_000)).toBe('LIVE');
+    expect(freshnessOf(SERVER_LIVE.TICK_PUSH_MS)).toBe('LIVE');
+    expect(freshnessOf(SERVER_LIVE.TICK_PUSH_MS * 4)).toBe('LIVE');
+  });
+
+  it('does not call a multi-second-old price LIVE', () => {
+    // The bug, stated as an assertion. Under the old thresholds every one of
+    // these returned 'LIVE' for a price up to 85 seconds out of date.
+    expect(freshnessOf(5_000)).toBe('DELAYED');
+    expect(freshnessOf(30_000)).toBe('STALE');
+    expect(freshnessOf(85_000)).toBe('STALE');
   });
 
   it('treats the exact DELAYED boundary as DELAYED, not LIVE', () => {

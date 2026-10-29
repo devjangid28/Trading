@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { DerivRow, LiqEvent } from '../../shared/types';
+import { isUnavailable } from '../../shared/types';
 import { usePolling } from '../lib/api';
 import { fmtCompact, fmtPrice, fmtPct } from '../lib/format';
 import { Chip, Empty, Panel, Spinner, LiveBadge } from './ui';
@@ -42,12 +43,28 @@ const QUADRANT_COLOR: Record<DerivRow['quadrant'], string> = {
 interface DerivPayload {
   rows: DerivRow[];
   asOf: number;
+  source: 'binance-futures' | 'bybit-linear' | null;
   unavailable: string | null;
 }
 
-function Cell({ children, color, title }: { children: React.ReactNode; color?: string; title?: string }) {
+function Cell({
+  children,
+  color,
+  title,
+  testId,
+}: {
+  children: React.ReactNode;
+  color?: string;
+  title?: string;
+  testId?: string;
+}) {
   return (
-    <td className="px-2 py-1.5 text-right mono" style={color ? { color } : undefined} title={title}>
+    <td
+      className="px-2 py-1.5 text-right mono"
+      style={color ? { color } : undefined}
+      title={title}
+      data-testid={testId}
+    >
       {children}
     </td>
   );
@@ -76,7 +93,10 @@ export function DerivativesTab({ onSelect }: { onSelect: (symbol: string) => voi
           case 'oiH4': return r.oiChange.h4;
           case 'quadrant': return r.oiChange.h1;
           case 'ls': return r.lsDivergence ?? 0;
-          case 'liq': return r.liq.h1;
+          case 'liq':
+            // An unavailable liquidation feed sorts as 0 rather than throwing,
+            // so the column still orders; the cell itself says why it is empty.
+            return isUnavailable(r.liq) ? 0 : r.liq.h1;
           case 'basis': return r.basisPct ?? 0;
           case 'cvd': return r.cvd;
         }
@@ -102,19 +122,31 @@ export function DerivativesTab({ onSelect }: { onSelect: (symbol: string) => voi
 
   if (error && !data) return <Empty message="Derivatives unavailable." hint={error} />;
 
+  const sourceLabel =
+    data?.source === 'bybit-linear'
+      ? 'Bybit linear'
+      : data?.source === 'binance-futures'
+        ? 'Binance futures'
+        : 'no venue';
+
   return (
     <div className="grid gap-3 lg:grid-cols-[1fr_340px]" style={{ height: '100%' }}>
       <Panel
         title="Derivatives heatmap"
         subtitle={
           data
-            ? `${data.rows.length} perps · Binance futures · funding normalised to 8h · CVD in USD notional`
+            ? `${data.rows.length} perps · ${sourceLabel} · funding normalised to 8h · CVD in USD notional`
             : undefined
         }
         right={data ? <LiveBadge updatedAt={data.asOf} /> : <button onClick={reload} className="text-[11px] px-2 py-0.5 rounded" style={{ background: 'var(--panel-2)', color: 'var(--muted)' }}>Refresh</button>}
         bodyClass="overflow-y-auto"
       >
-        {loading && !data ? <Spinner label="Loading perps…" /> : !data ? null : (
+        {loading && !data ? <Spinner label="Loading perps…" /> : !data ? null : data.rows.length === 0 ? (
+          <Empty
+            message="No perp rows returned."
+            hint={data.unavailable ?? 'The venue answered but none of the tracked symbols matched.'}
+          />
+        ) : (
           <table className="w-full border-collapse text-[11.5px]">
             <thead className="sticky top-0 z-10" style={{ background: 'var(--panel)' }}>
               <tr className="text-left" style={{ color: 'var(--faint)' }}>
@@ -141,7 +173,19 @@ export function DerivativesTab({ onSelect }: { onSelect: (symbol: string) => voi
                   <td className="px-2 py-1.5 font-semibold">{r.symbol.replace(/USDT$/, '')}</td>
                   <Cell
                     color={FUNDING_COLOR[r.fundingLabel]}
-                    title={`${r.fundingLabel} · z=${r.fundingZ.toFixed(2)} · interval ${r.fundingIntervalH}h`}
+                    /**
+                     * `fundingZ` is null until a funding history is collected, and
+                     * null renders as a dash. It used to be a hardcoded 0 shown
+                     * as "z=0.00", which is a placeholder wearing the label of a
+                     * computed statistic.
+                     */
+                    title={
+                      `${r.fundingLabel} · ` +
+                      (r.fundingZ === null
+                        ? 'z not computed — no funding history collected yet'
+                        : `z=${r.fundingZ.toFixed(2)}`) +
+                      ` · interval ${r.fundingIntervalH}h`
+                    }
                   >
                     {(r.funding8h * 100).toFixed(4)}%
                   </Cell>
@@ -158,10 +202,20 @@ export function DerivativesTab({ onSelect }: { onSelect: (symbol: string) => voi
                   </Cell>
                   <td className="px-2 py-1.5 text-right" style={{ color: QUADRANT_COLOR[r.quadrant] }}>
                     {QUADRANT_SHORT[r.quadrant]}
-                    {r.liq.cascade && <span className="ml-1" style={{ color: '#dc2626' }} title="Liquidation cascade in the last 5m">⚡</span>}
+                    {!isUnavailable(r.liq) && r.liq.cascade && (
+                      <span className="ml-1" style={{ color: '#dc2626' }} title="Liquidation cascade in the last 5m">⚡</span>
+                    )}
                   </td>
                   <Cell color={r.cvd > 0 ? 'var(--color-up)' : r.cvd < 0 ? 'var(--color-down)' : undefined}
-                    title={`CVD slope ${r.cvdSlope} · taker ratio ${(r.takerRatio ?? 0.5).toFixed(3)}${r.cvdDivergence ? ' · price high without CVD confirmation' : ''}`}>
+                    /**
+                     * The tooltip states that CVD is derived from spot kline
+                     * taker-buy notional, because it is. A reader who assumes
+                     * "CVD" means a futures trade tape would otherwise be
+                     * reading a price-action proxy as if it were order flow.
+                     */
+                    title={`CVD ${r.cvd.toFixed(0)} USD · slope ${r.cvdSlope} · taker ratio ${(r.takerRatio ?? 0.5).toFixed(3)}` +
+                      `${r.cvdDivergence ? ' · price high without CVD confirmation' : ''}` +
+                      `\nDerived from spot kline taker-buy notional — a price-action proxy, not a futures trade tape.`}>
                     {r.cvd > 0 ? '▲' : r.cvd < 0 ? '▼' : '·'}{fmtCompact(Math.abs(r.cvd))}
                   </Cell>
                   <Cell
@@ -170,8 +224,21 @@ export function DerivativesTab({ onSelect }: { onSelect: (symbol: string) => voi
                   >
                     {r.lsDivergence === null ? '—' : `${r.lsDivergence > 0 ? '+' : ''}${(r.lsDivergence * 100).toFixed(0)}%`}
                   </Cell>
-                  <Cell title={`5m long ${fmtCompact(r.liq.longM5)} / short ${fmtCompact(r.liq.shortM5)}`}>
-                    {r.liq.h1 > 0 ? `$${fmtCompact(r.liq.h1)}` : '—'}
+                  <Cell
+                    /**
+                     * A zero here would claim "no liquidations occurred". When the
+                     * feed is simply not attached, the cell says so instead, with
+                     * the reason on hover.
+                     */
+                    title={
+                      isUnavailable(r.liq)
+                        ? r.liq.reason
+                        : `5m long ${fmtCompact(r.liq.longM5)} / short ${fmtCompact(r.liq.shortM5)}` +
+                          `${r.liq.isSample ? ' · forceOrder samples at most 1/symbol/second — a lower bound' : ''}`
+                    }
+                    testId="liq-cell"
+                  >
+                    {isUnavailable(r.liq) ? 'n/a' : r.liq.h1 > 0 ? `$${fmtCompact(r.liq.h1)}` : '—'}
                   </Cell>
                   <Cell color={r.basisPct === null ? undefined : Math.abs(r.basisPct) > 1 ? '#d97706' : undefined}
                     title={r.basisPct === null ? 'Index price looks stale — basis not shown rather than reported wrongly' : undefined}>

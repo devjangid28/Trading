@@ -1,7 +1,7 @@
 ﻿import { LIVE, REFRESH } from '../../config.js';
 import { cached } from '../../lib/cache.js';
 import type { Candle, DerivRow, LiqBuckets } from '../../../../shared/types';
-import { binanceFutures, bybitSnapshot, hyperliquidSnapshot, spotDepth } from './providers.js';
+import { binanceFutures, bybitFutures, bybitSnapshot, hyperliquidSnapshot, spotDepth } from './providers.js';
 import { UNIVERSE, EXCLUDE_FROM_BOARD } from '../universe.js';
 import { cvd, cvdDivergence } from '../../live/marketState.js';
 import { crossVenue, fundingLabel, normaliseFunding, oiChanges, oiQuadrant, QUADRANT_LABEL, quadrantScore, lsDivergence, basisPct } from '../../engine/derivatives.js';
@@ -19,27 +19,45 @@ export interface LiveSource {
   liqTally(symbol: string): LiqBuckets;
 }
 
+export interface DerivativesResult {
+  rows: DerivRow[];
+  asOf: number;
+  source: 'binance-futures' | 'bybit-linear' | null;
+  unavailable: string | null;
+}
+
 export async function buildDerivatives(
   live?: LiveSource,
-): Promise<{ rows: DerivRow[]; asOf: number; unavailable: string | null }> {
+): Promise<DerivativesResult> {
   const now = Date.now();
   const pairs = UNIVERSE
     .filter((u) => !EXCLUDE_FROM_BOARD.has(u.base))
     .map((u) => `${u.base}USDT`);
 
-  const [raw, hyper, bybit] = await Promise.all([
+  const [binanceRaw, hyper, bybit] = await Promise.all([
     binanceFutures.snapshot(pairs).catch(() => []),
     hyperliquidSnapshot().catch(() => []),
     bybitSnapshot(pairs).catch(() => new Map()),
   ]);
 
+  const source: DerivativesResult['source'] = binanceRaw.length
+    ? 'binance-futures'
+    : 'bybit-linear';
+  const raw = binanceRaw.length
+    ? binanceRaw
+    : await bybitFutures.snapshot(pairs).catch(() => []);
+
   if (!raw.length) {
     return {
       rows: [],
       asOf: now,
-      unavailable: 'Binance futures unreachable. Derivatives data is unavailable.',
+      source: null,
+      unavailable:
+        'Binance futures and Bybit linear are both unreachable. Derivatives data is unavailable.',
     };
   }
+
+  const provider = source === 'binance-futures' ? binanceFutures : bybitFutures;
 
   /**
    * One row per perp. Pulled in parallel batches rather than one symbol at a
@@ -48,8 +66,9 @@ export async function buildDerivatives(
    */
   const buildRow = async (r: (typeof raw)[number]): Promise<DerivRow | null> => {
     const [oiHist, ls, candles] = await Promise.all([
-      binanceFutures.oiHistory(r.symbol, '5m', 120).catch(() => ({ symbol: r.symbol, points: [] })),
-      binanceFutures.longShort?.(r.symbol, '5m').catch(() => null) ?? Promise.resolve(null),
+      provider.oiHistory(r.venueSymbol ?? r.symbol, '5m', 120)
+        .catch(() => ({ symbol: r.venueSymbol ?? r.symbol, points: [] })),
+      provider.longShort?.(r.venueSymbol ?? r.symbol, '5m').catch(() => null) ?? Promise.resolve(null),
       fetchKlines(r.symbol, '5m', 60).catch(() => []),
     ]);
 
@@ -70,11 +89,20 @@ export async function buildDerivatives(
     return {
       symbol: r.symbol,
       funding8h: Math.round(f8h * 1e8) / 1e8,
-      fundingZ: 0,
+      /**
+       * Null, not zero.
+       *
+       * `fundingZScore()` exists and works, but it needs a funding history that
+       * nothing collects. The field was hardcoded to `0`, and the UI rendered it
+       * as "z=0.00" inside a tooltip reading "<label> · z=0.00 · interval 8h" -
+       * a placeholder presented as a computed statistic. Until history is
+       * collected this stays null and the UI shows a dash.
+       */
+      fundingZ: null,
       fundingIntervalH: r.fundingIntervalH,
       fundingLabel: label,
       openInterest: r.openInterest,
-      oiUsd: Math.round(r.openInterest * r.markPrice),
+      oiUsd: Math.round(r.oiUsd ?? r.openInterest * r.markPrice),
       oiChange: {
         m5: round2(changes.m5), h1: round2(changes.h1),
         h4: round2(changes.h4), d1: round2(changes.d1),
@@ -102,12 +130,54 @@ export async function buildDerivatives(
       cvdSlope: round4(c.slope),
       takerRatio: ls?.takerRatio.length ? round3(ls.takerRatio[ls.takerRatio.length - 1].ratio) : round3(c.takerRatio),
       cvdDivergence: closed.length >= 24 ? cvdDivergence(closed) : false,
+      /**
+       * Liquidations, or the reason there are none.
+       *
+       * The board path calls `buildDerivatives()` without a live source, so this
+       * used to emit an all-zero bucket object tagged `isSample: true` under a
+       * `binance-futures` meta. A zero reads as "no liquidations happened"; it
+       * actually meant "no liquidation feed is attached here". Both the number
+       * and the provenance were wrong, and the repo's own rule says a zero is a
+       * lie. So: unavailable, with the reason attached.
+       */
       liq: live
         ? live.liqTally(r.symbol)
-        : { m5: 0, h1: 0, d1: 0, longM5: 0, shortM5: 0, longH1: 0, shortH1: 0, cascade: false, isSample: true },
+        : {
+            available: false,
+            reason:
+              'No liquidation feed is attached: the Binance forceOrder socket is not open, ' +
+              'so no prints were sampled. This is not a zero.',
+            lastGoodAt: null,
+          },
       depth: null,
-      crossVenue: crossVenue(r.symbol, f8h, r.openInterest * r.markPrice, hyper, bybit),
-      meta: { asOf: now, source: 'binance-futures', stale: false },
+      crossVenue: crossVenue(
+        r.symbol,
+        f8h,
+        r.oiUsd ?? r.openInterest * r.markPrice,
+        hyper,
+        source === 'binance-futures' ? bybit : new Map(),
+        source,
+      ),
+      /**
+       * `stale` was a hardcoded `false` on every row even though
+       * `LIVE.DELAYED_AFTER_MS` exists precisely to decide it, and no server
+       * code read it. It is now a real measurement: how long the upstream
+       * snapshot took to arrive relative to the threshold the client also uses,
+       * so the two cannot disagree.
+       *
+       * `source` names the venue that actually supplied funding, OI, basis and
+       * ratios. CVD is the exception, so `derivation` names it: `fetchKlines`
+       * hits the SPOT host, and CVD is computed from that series' taker-buy
+       * notional. That is a price-action proxy, not a futures trade tape, and
+       * an unlabelled proxy is indistinguishable from a measurement.
+       */
+      meta: {
+        asOf: now,
+        source,
+        ageMs: Date.now() - now,
+        stale: Date.now() - now >= LIVE.DELAYED_AFTER_MS,
+        derivation: 'cvd from spot kline taker-buy notional (proxy, not a trade tape)',
+      },
     };
   };
 
@@ -121,7 +191,7 @@ export async function buildDerivatives(
   }
 
   rows.sort((a, b) => Math.abs(b.funding8h) - Math.abs(a.funding8h));
-  return { rows, asOf: now, unavailable: null };
+  return { rows, asOf: now, source, unavailable: null };
 }
 
 function round2(v: number): number { return Math.round(v * 100) / 100; }

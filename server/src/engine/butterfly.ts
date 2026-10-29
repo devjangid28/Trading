@@ -21,6 +21,12 @@
  */
 export interface HasChange {
   changePct: number;
+  /**
+   * The engine's strength score. Optional so a caller that only has moves can
+   * still build a distribution, but the scanner supplies it because it is what
+   * separates "moved and is tradeable" from "moved and is chop".
+   */
+  strength?: number;
 }
 
 export interface ButterflyBucket {
@@ -48,6 +54,24 @@ export interface Butterfly {
   bullish: number;
   bearish: number;
   flat: number;
+  /**
+   * Assets that moved but scored ZERO on strength, so the scanner's efficiency
+   * gate kept them off the board. These are "choppy", not "flat": they moved,
+   * they just went nowhere.
+   *
+   * This exists because the chips previously showed the board-size cap (20 per
+   * side) while the caption claimed to describe the market, and nothing
+   * accounted for the coins that were scanned and then discarded.
+   *
+   * PARTITION: `onBoardUp + onBoardDown + choppy === n` exactly. Every scanned
+   * asset is in exactly one bucket, so the chips can never quietly disagree
+   * with the number of rows rendered.
+   */
+  choppy: number;
+  /** Moved up AND clean enough to be tradable — the true bullish count. */
+  onBoardUp: number;
+  /** Moved down AND clean enough to be tradable. */
+  onBoardDown: number;
   /** Strongest gain and loss in the universe, in percent. */
   top: number;
   bottom: number;
@@ -95,6 +119,9 @@ export function buildButterfly(rows: HasChange[], half = HALF_BUCKETS): Butterfl
   let b = 0;
   let s = 0;
   let flat = 0;
+  let choppy = 0;
+  let onBoardUp = 0;
+  let onBoardDown = 0;
   let top = -Infinity;
   let bottom = Infinity;
 
@@ -109,6 +136,14 @@ export function buildButterfly(rows: HasChange[], half = HALF_BUCKETS): Butterfl
     if (pct > 0) b++;
     else if (pct < 0) s++;
     else flat++;
+
+    // The strength gate is what actually decides whether a coin reaches a
+    // board. Anything at or below zero is chop by definition and is counted
+    // here exactly once, which is what makes the partition total.
+    const isChoppy = r.strength !== undefined && !(r.strength > 0);
+    if (isChoppy) choppy++;
+    else if (pct > 0) onBoardUp++;
+    else if (pct < 0) onBoardDown++;
 
     const i = bucketIndex(pct) - first;
     if (i < 0 || i >= size) continue;
@@ -140,6 +175,9 @@ export function buildButterfly(rows: HasChange[], half = HALF_BUCKETS): Butterfl
     bullish: b,
     bearish: s,
     flat,
+    choppy,
+    onBoardUp,
+    onBoardDown,
     top: Number.isFinite(top) ? top : 0,
     bottom: Number.isFinite(bottom) ? bottom : 0,
     skew: movers === 0 ? null : (b - s) / movers,

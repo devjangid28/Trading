@@ -1,0 +1,314 @@
+/* ───────────────────────────────────────────────────────────────────────────
+   Mind layer — probability, drivers, regime, calibration.
+
+   Design rules this sheet follows, from the house rules:
+
+   1. A probability is never the only thing on screen. It always sits beside the
+      net R and the band, because "54%" alone is read as a verdict.
+   2. Vetoes are coloured as refusals, not as low scores.
+   3. A missing number is a dash, never a zero and never a 50%.
+   4. Every metric role uses the shared tokens, so light and dark both work.
+
+   No animation is used to convey meaning. The gauge fill is a width, not a
+   transition — a probability that eases into place is a probability you cannot
+   read mid-move, and `prefers-reduced-motion` would then change the claim.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.mind-strip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.mind-strip.is-waiting {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.mind-strip-counts {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.mind-strip-brier {
+  font-variant-numeric: tabular-nums;
+}
+.mind-strip-brier strong {
+  color: var(--text);
+}
+.mind-strip-brier .is-good {
+  color: var(--color-up);
+}
+.mind-strip-brier .is-warn {
+  color: var(--color-amber);
+}
+
+.mind-strip-suppressed {
+  color: var(--color-amber);
+}
+
+.mind-strip-model {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.mind-strip-why {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.mind-regime {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: lowercase;
+}
+.mind-regime::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+/* ── The gauge ───────────────────────────────────────────────────────────── */
+
+.mind-gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mind-gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.mind-gauge-label {
+  font-size: 10px;
+  color: var(--faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* 22px, not 40px. The number is a readout of the bar, not a headline. */
+.mind-gauge-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.mind-gauge-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.mind-gauge-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.mind-gauge-baseline {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 50%;
+  width: 1px;
+  background: var(--faint);
+  opacity: 0.6;
+}
+
+.mind-gauge-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.mind-gauge-foot strong {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.mind-band {
+  letter-spacing: 0.02em;
+}
+
+/* ── Drivers ─────────────────────────────────────────────────────────────── */
+
+.mind-drivers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mind-drivers li {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+
+/* A disclosure driver is a "this number is thin" notice, not a score mover.
+   It is indented and ruled so it cannot be mistaken for evidence. */
+.mind-drivers li.is-disclosure {
+  color: var(--color-amber);
+  padding-left: 8px;
+  border-left: 2px solid var(--color-amber);
+  grid-template-columns: minmax(70px, auto) 1fr;
+}
+
+.mind-driver-name {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.mind-driver-reason {
+  color: var(--text);
+}
+
+.mind-driver-num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mind-drivers-empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* ── Vetoes ──────────────────────────────────────────────────────────────── */
+
+.mind-vetoes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mind-vetoes li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-down);
+  color: var(--muted);
+}
+
+.mind-veto-code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-down);
+  white-space: nowrap;
+}
+
+/* ── Calibration ─────────────────────────────────────────────────────────── */
+
+.mind-calibration {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--muted);
+  border-top: 1px dashed var(--border);
+  padding-top: 5px;
+}
+
+.mind-calibration strong {
+  color: var(--color-amber);
+}
+
+/* ── Regime evidence ─────────────────────────────────────────────────────── */
+
+.mind-evidence {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-top: 1px dashed var(--border);
+  padding-top: 5px;
+}
+
+.mind-evidence li {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) 60px 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 10px;
+}
+
+.mind-evidence-input {
+  color: var(--muted);
+}
+
+.mind-evidence-value {
+  font-family: var(--font-mono);
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mind-evidence-reading {
+  color: var(--faint);
+}
+
+.mind-why {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+}
+
+/* Reduced motion: the gauge has no transitions to begin with, so this only
+   guards the underline opacity if it is ever animated later. */
+@media (prefers-reduced-motion: reduce) {
+  .mind-strip-why,
+  .mind-why {
+    text-decoration: none;
+  }
+}

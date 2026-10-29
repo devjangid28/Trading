@@ -1,4 +1,4 @@
-﻿import { DERIVATIVES } from '../config.js';
+﻿import { DERIVATIVES, LIVE } from '../config.js';
 import type { Candle, DerivRow, LiqBuckets, OiPoint } from '../../../shared/types';
 import type { DerivRaw, HyperRow } from '../data/derivatives/providers.js';
 
@@ -20,11 +20,44 @@ export function normaliseFunding(rate: number, intervalH: number): number {
   return rate * (8 / intervalH);
 }
 
-export function fundingZScore(current: number, history: number[]): number {
-  if (history.length < 8) return 0;
-  const mean = history.reduce((a, b) => a + b, 0) / history.length;
-  const sd = Math.sqrt(history.reduce((a, b) => a + (b - mean) ** 2, 0) / history.length);
-  return sd > 0 ? (current - mean) / sd : 0;
+/**
+ * z-score of the current funding rate against its own history.
+ *
+ * **Null, never zero** — the M1.4 fix.
+ *
+ * This used to return `0` when the history was too short to compute a
+ * z-score, and `0` when the history had no variance. Both are fabrications:
+ * a z-score of exactly zero says "the current rate is exactly at the mean",
+ * and a UI that renders it as `z=0.00` is presenting a placeholder under a
+ * label that implies a computation. The board path already emits
+ * `fundingZ: null` for the same reason (`buildDerivatives` collects no
+ * funding history), so this function was the one place still able to
+ * manufacture the zero.
+ *
+ * A constant history has zero standard deviation, so the z-score is
+ * genuinely undefined — division by zero is not a measurement either.
+ */
+export function fundingZScore(current: number, history: number[]): number | null {
+  if (history.length < 8) return null;
+  // Welford's algorithm, not `sum / n`.
+  //
+  // The naive mean of 30 identical values is not exactly that value in
+  // floating point, so the naive variance of a constant history is not exactly
+  // zero either — it comes out around 1e-19, and dividing by it produces a
+  // z-score of 1.5e15, which is a number about nothing. Welford's incremental
+  // form leaves `m2` at EXACTLY zero for identical values, so the
+  // "no variance" case is detected as the no-variance case it is.
+  let mean = 0;
+  let m2 = 0;
+  for (let i = 0; i < history.length; i++) {
+    const delta = history[i] - mean;
+    mean += delta / (i + 1);
+    m2 += delta * (history[i] - mean);
+  }
+  if (!(m2 > 0)) return null;
+  const sd = Math.sqrt(m2 / history.length);
+  if (!(sd > 0)) return null;
+  return (current - mean) / sd;
 }
 
 export type FundingLabel =
@@ -145,13 +178,19 @@ export function lsDivergence(
 
 export function crossVenue(
   symbol: string,
-  binanceFunding8h: number,
-  binanceOiUsd: number,
+  primaryFunding8h: number,
+  primaryOiUsd: number,
   hyper: HyperRow[] | null,
   bybit: Map<string, { funding8h: number; oiUsd: number }>,
+  primaryName: 'binance-futures' | 'bybit-linear' = 'binance-futures',
 ): DerivRow['crossVenue'] {
   const venues: NonNullable<DerivRow['crossVenue']>['venues'] = [
-    { name: 'binance', funding8h: binanceFunding8h, oiUsd: binanceOiUsd, available: true },
+    {
+      name: primaryName === 'bybit-linear' ? 'bybit' : 'binance',
+      funding8h: primaryFunding8h,
+      oiUsd: primaryOiUsd,
+      available: true,
+    },
   ];
 
   const hl = hyper?.find((h) => h.symbol === symbol);
@@ -162,13 +201,15 @@ export function crossVenue(
     available: !!hl,
   });
 
-  const by = bybit.get(symbol);
-  venues.push({
-    name: 'bybit',
-    funding8h: by?.funding8h ?? 0,
-    oiUsd: by?.oiUsd ?? 0,
-    available: !!by,
-  });
+  if (primaryName !== 'bybit-linear') {
+    const by = bybit.get(symbol);
+    venues.push({
+      name: 'bybit',
+      funding8h: by?.funding8h ?? 0,
+      oiUsd: by?.oiUsd ?? 0,
+      available: !!by,
+    });
+  }
 
   const available = venues.filter((v) => v.available);
   if (available.length < 2) return { venues, fundingSpread: null, oiConcentration: null, divergence: false };
@@ -223,6 +264,15 @@ export interface BuildRowInput {
   liq: LiqBuckets;
   cross: DerivRow['crossVenue'];
   depth: DerivRow['depth'];
+  /**
+   * When the upstream snapshot was taken.
+   *
+   * Added by the M1.4 fix. This function used to stamp `meta.stale: false`
+   * unconditionally — a hardcoded claim that the data was fresh, made by a
+   * function that had no idea how old the data was. The age is now measured
+   * from the caller's `asOf`, and the staleness is derived from it.
+   */
+  asOf?: number;
 }
 
 export function buildDerivRow(input: BuildRowInput): DerivRow {
@@ -230,6 +280,7 @@ export function buildDerivRow(input: BuildRowInput): DerivRow {
     raw, oiHistoryPoints, fundingHistory, accountRatio, topPositionRatio,
     takerRatio, cvd, cvdDivergence, liq, cross, depth,
   } = input;
+  const asOf = input.asOf ?? Date.now();
 
   const funding8h = normaliseFunding(raw.fundingRate, raw.fundingIntervalH);
   const changes = oiChanges(oiHistoryPoints);
@@ -263,7 +314,15 @@ export function buildDerivRow(input: BuildRowInput): DerivRow {
     liq,
     depth,
     crossVenue: cross,
-    meta: { asOf: Date.now(), source: 'binance-futures', stale: false },
+    // The M1.4 fix: `stale` is MEASURED from the caller's `asOf`, not asserted.
+    // A hardcoded `false` was a claim about freshness that the function had no
+    // information to support.
+    meta: {
+      asOf,
+      source: 'binance-futures',
+      ageMs: Math.max(0, Date.now() - asOf),
+      stale: Math.max(0, Date.now() - asOf) >= LIVE.STALE_AFTER_MS,
+    },
   };
 }
 

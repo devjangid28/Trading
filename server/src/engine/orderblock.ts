@@ -79,6 +79,24 @@ export function findLiquidityPools(pivots: Pivot[], tolerancePct = 0.12): Pool[]
 }
 
 /**
+ * Index of the oldest candle that still belongs to the current session.
+ *
+ * Every 24h figure — session VWAP, day change, day high/low — is read over this
+ * window, and the window is `STRUCTURE.SESSION_CANDLES` closed candles deep
+ * (289 on 5m, i.e. the trailing 24h span inclusive of both ends). Returns 0 for
+ * a series shorter than a session, so a short history reads as "everything we
+ * have" instead of a negative index that silently drops candles.
+ */
+export function sessionStartIndex(candles: Candle[]): number {
+  return Math.max(0, candles.length - STRUCTURE.SESSION_CANDLES);
+}
+
+/** First timestamp of the session window, or 0 when the series is empty. */
+export function sessionStartTime(candles: Candle[]): number {
+  return candles[sessionStartIndex(candles)]?.t ?? 0;
+}
+
+/**
  * Volume-weighted average price over the current session (UTC day for crypto).
  * Bullish setups above VWAP have the average participant on their side.
  */

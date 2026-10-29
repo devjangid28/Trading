@@ -11,3 +11,29 @@ server/data/orderflow.db
 server/data/orderflow.db-shm
 server/data/orderflow.db-wal
 server/data/scan-cache.json
+server/data/terminal-history.db
+server/data/terminal-history.db-shm
+server/data/terminal-history.db-wal
+
+# Fix 2/3 runtime artifacts: supervisor lock + logs, and the throwaway
+# databases the mock proof and mock test create for their own server.
+data/*.lock
+data/logs/
+data/mock-*.db
+data/mock-*.db-shm
+data/mock-*.db-wal
+data/test-ledger*.db
+data/test-ledger*.db-shm
+data/test-ledger*.db-wal
+
+# The Engine Lab's own store (Part XX). It is evidence about the learning loop,
+# not about the engine's signals, so it lives in its own file.
+server/data/lab.db
+server/data/lab.db-shm
+server/data/lab.db-wal
+data/test-lab*.db
+data/test-lab*.db-shm
+data/test-lab*.db-wal
+data/qa-lab*.db
+data/qa-lab*.db-shm
+data/qa-lab*.db-wal

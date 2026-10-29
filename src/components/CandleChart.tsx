@@ -9,6 +9,10 @@ interface Props {
   height?: number;
   showPrevious?: boolean;
   showContext?: boolean;
+  maxCandles?: number;
+  volumeProfile?: { poc: number; vah: number; val: number } | null;
+  /** Draw the quote/base volume pane under the candles. */
+  showVolume?: boolean;
 }
 
 const PAD_L = 8;
@@ -39,6 +43,9 @@ export function CandleChart({
   height = 320,
   showPrevious = true,
   showContext = true,
+  maxCandles = 120,
+  volumeProfile,
+  showVolume = false,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
@@ -61,7 +68,7 @@ export function CandleChart({
     const n = candles.length;
     if (n === 0) return null;
 
-    const visible = n > 120 ? candles.slice(-120) : candles;
+    const visible = n > maxCandles ? candles.slice(-maxCandles) : candles;
     const ist = visible.length > 1 ? visible[visible.length - 1].t - visible[0].t > 12 * 3600_000 : true;
 
     let min = Infinity;
@@ -73,6 +80,11 @@ export function CandleChart({
 
     const levels: number[] = [];
     if (vwap && Number.isFinite(vwap)) levels.push(vwap);
+    if (volumeProfile) {
+      if (Number.isFinite(volumeProfile.poc)) levels.push(volumeProfile.poc);
+      if (Number.isFinite(volumeProfile.vah)) levels.push(volumeProfile.vah);
+      if (Number.isFinite(volumeProfile.val)) levels.push(volumeProfile.val);
+    }
     if (setup) {
       levels.push(setup.obLow, setup.obHigh, setup.z, setup.invalidation);
       for (const t of setup.targets) levels.push(t.price);
@@ -92,13 +104,16 @@ export function CandleChart({
     max += pad;
     if (min < 0) min = 0;
 
+    const padB = showVolume ? 58 : PAD_B;
     const plotW = Math.max(40, width - PAD_L - PAD_R);
-    const plotH = Math.max(40, height - PAD_T - PAD_B);
+    const plotH = Math.max(40, height - PAD_T - padB);
+    let maxV = 0;
+    if (showVolume) for (const c of visible) if (Number.isFinite(c.v) && c.v > maxV) maxV = c.v;
     const x = (i: number) => PAD_L + (i / Math.max(1, visible.length - 1)) * plotW;
     const y = (p: number) => PAD_T + (1 - (p - min) / (max - min)) * plotH;
 
-    return { visible, ist, min, max, plotW, plotH, x, y };
-  }, [candles, setup, vwap, width, height, showPrevious, showContext]);
+    return { visible, ist, min, max, plotW, plotH, x, y, maxV };
+  }, [candles, setup, vwap, volumeProfile, width, height, showPrevious, showContext, maxCandles, showVolume]);
 
   if (!view) {
     return (
@@ -112,7 +127,7 @@ export function CandleChart({
     );
   }
 
-  const { visible, ist, min, max, plotW, plotH, x, y } = view;
+  const { visible, ist, min, max, plotW, plotH, x, y, maxV } = view;
   const n = visible.length;
   const bodyW = Math.max(1.5, Math.min(9, (plotW / n) * 0.66));
   const bullish = setup?.side === 'bullish';
@@ -126,6 +141,32 @@ export function CandleChart({
 
   const last = visible[n - 1];
   const hovered = hover !== null ? visible[hover] : null;
+  const multiDay = last.t - visible[0].t >= 24 * 3600_000;
+  const axisLabel = (i: number, k: number) => {
+    if (!multiDay) return fmtClock(visible[i].t, ist);
+    if (k === 0) return fmtDay(visible[i].t, ist);
+    const date = new Date(visible[i].t + (ist ? 330 * 60_000 : 0));
+    const prev = new Date(visible[gridIdx[k - 1]].t + (ist ? 330 * 60_000 : 0));
+    return date.getUTCDate() === prev.getUTCDate()
+      ? fmtClock(visible[i].t, ist)
+      : fmtDay(visible[i].t, ist);
+  };
+  const volBase = height - 18;
+  const volTop = PAD_T + plotH + 14;
+  const volH = Math.max(1, volBase - volTop);
+
+  /**
+   * The chart is meaningful to a screen reader only if it says what it is
+   * showing, so the description is derived from the data actually drawn rather
+   * than hardcoded. It states the zone only when a zone is present, because
+   * "no order block right now" is information, not a missing field.
+   */
+  const ariaLabel = setup
+    ? `Price chart, ${n} candles, latest close ${fmtPrice(last.c)}. ` +
+      `${setup.side === 'bullish' ? 'Bullish' : 'Bearish'} order block zone ` +
+      `from ${fmtPrice(setup.obLow)} to ${fmtPrice(setup.obHigh)}, ` +
+      `invalidation ${fmtPrice(setup.invalidation)}.`
+    : `Price chart, ${n} candles, latest close ${fmtPrice(last.c)}. No order block zone is currently marked.`;
 
   return (
     <div
@@ -137,6 +178,9 @@ export function CandleChart({
       <svg
         width={width}
         height={height}
+        role="img"
+        aria-label={ariaLabel}
+        data-testid="candle-chart"
         style={{ display: 'block', touchAction: 'pan-y' }}
         onMouseMove={(e) => {
           const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect();
@@ -188,6 +232,37 @@ export function CandleChart({
             strokeDasharray="2 4"
           />
         ))}
+
+        {showVolume && maxV > 0 && (
+          <g data-testid="volume-pane">
+            <line
+              x1={PAD_L}
+              x2={PAD_L + plotW}
+              y1={volTop}
+              y2={volTop}
+              stroke="var(--grid)"
+              strokeWidth={1}
+            />
+            <text x={PAD_L + 1} y={volTop - 4} fontSize={8.5} fill="var(--faint)" className="mono">
+              VOL
+            </text>
+            {visible.map((c, i) => {
+              const vh = Math.max(0, (c.v / maxV) * volH);
+              return (
+                <rect
+                  key={`vol${c.t}`}
+                  data-testid="volume-bar"
+                  x={x(i) - bodyW / 2}
+                  y={volBase - vh}
+                  width={bodyW}
+                  height={vh}
+                  fill={c.c >= c.o ? UP : DOWN}
+                  opacity={0.42}
+                />
+              );
+            })}
+          </g>
+        )}
 
         {/* Previous setups, left where they happened */}
         {showPrevious &&
@@ -250,7 +325,7 @@ export function CandleChart({
           const bot = y(Math.min(c.o, c.c));
           const doji = Math.abs(bot - top) < 1;
           return (
-            <g key={c.t} opacity={c.closed ? 1 : 0.55}>
+            <g key={c.t} opacity={c.closed ? 1 : 0.55} data-testid="candle" data-closed={c.closed ? 'true' : 'false'}>
               <line x1={cx} x2={cx} y1={y(c.h)} y2={y(c.l)} stroke={color} strokeWidth={1} />
               {doji ? (
                 <line x1={cx - bodyW / 2} x2={cx + bodyW / 2} y1={top} y2={top} stroke={color} strokeWidth={1.4} />
@@ -285,6 +360,26 @@ export function CandleChart({
             </text>
           </g>
         )}
+
+        {/* Volume Profile: POC (amber solid), VAH/VAL (blue dashed) */}
+        {volumeProfile && [
+          { price: volumeProfile.poc, label: 'POC', color: '#eab308', dash: undefined, width: 1.6 },
+          { price: volumeProfile.vah, label: 'VAH', color: 'rgba(99,179,237,0.8)', dash: '4 3', width: 1 },
+          { price: volumeProfile.val, label: 'VAL', color: 'rgba(99,179,237,0.8)', dash: '4 3', width: 1 },
+        ].filter((l) => Number.isFinite(l.price) && l.price >= min && l.price <= max).map((l) => (
+          <g key={l.label}>
+            <line
+              x1={PAD_L} x2={PAD_L + plotW}
+              y1={y(l.price)} y2={y(l.price)}
+              stroke={l.color} strokeWidth={l.width}
+              strokeDasharray={l.dash}
+            />
+            <rect x={PAD_L + plotW - 28} y={y(l.price) - 7} width={26} height={13} rx={2} fill="#0A0D11" opacity={0.85} />
+            <text x={PAD_L + plotW - 15} y={y(l.price) + 3} fontSize={9} fill={l.color} fontWeight={700} textAnchor="middle" className="mono">
+              {l.label}
+            </text>
+          </g>
+        ))}
 
         {/* Context levels: amber dotted, drawn across the whole chart */}
         {showContext &&
@@ -386,9 +481,7 @@ export function CandleChart({
             textAnchor="middle"
             className="mono"
           >
-            {k === 0 || i - gridIdx[k - 1] > 20
-              ? fmtDay(visible[i].t, ist)
-              : fmtClock(visible[i].t, ist)}
+            {axisLabel(i, k)}
           </text>
         ))}
 

@@ -69,21 +69,69 @@ describe('resolveOutcome: targets', () => {
   });
 
   it('maps TP1/TP2/TP3 by distance', () => {
-    // A candle that OPENS above TP1 (low 105) and reaches 106 credits TP2,
-    // because price never traded at 104.
+    // A candle that OPENS above TP1 (low 105) and reaches 106.
+    //
+    // A resting SELL limit at 104 is filled when the market trades at or
+    // through 104 — including when the market GAPS through it. The order does
+    // not get to sit unfilled because the price never "traded at exactly 104";
+    // it is filled at the open, at a BETTER price than 104.
+    //
+    // The previous expectation here was TP2, on the reasoning that "price gapped
+    // past 104 — it never filled there". That reasoning was mechanically wrong,
+    // and it was expensive: a take-profit the market gapped through was never
+    // credited at all, so the trade ran on and EXPIRED. On the live ledger
+    // that produced 28 expired rows carrying 28.6% of the entire ledger's R.
     const tp2 = resolveOutcome({
       ...base,
       targets: [104, 106],
       candles: [bar(0, 106.5, 105, 106)],
     });
-    expect(tp2.outcome).toBe('TP2');
+    expect(tp2.outcome).toBe('TP1');
+    expect(tp2.price).toBe(104);
 
     const tp3 = resolveOutcome({
       ...base,
       targets: [104, 106, 108],
       candles: [bar(0, 108.5, 107, 108)],
     });
-    expect(tp3.outcome).toBe('TP3');
+    expect(tp3.outcome).toBe('TP1');
+    expect(tp3.price).toBe(104);
+  });
+
+  it('credits a target the market gapped through, at the target price', () => {
+    // The candle is ENTIRELY beyond TP1: it opened at 105 and never traded
+    // inside 104. The order still filled.
+    const gapped = resolveOutcome({
+      ...base,
+      targets: [104],
+      candles: [bar(0, 106.5, 105, 106)],
+    });
+    expect(gapped.outcome).toBe('TP1');
+    expect(gapped.price).toBe(104);
+    expect(gapped.rMultiple).toBeCloseTo(2, 6);
+  });
+
+  it('fills a stop that the market gapped THROUGH at the gap, not at the stop', () => {
+    // The candle opened below the stop (98) and stayed there. The stop was
+    // filled at the open, which is worse than the stop price.
+    const gapped = resolveOutcome({
+      ...base,
+      candles: [{ t: T0, h: 99, l: 95, c: 95.5, o: 96 }],
+    });
+    expect(gapped.outcome).toBe('STOP');
+    expect(gapped.price).toBe(96);
+    expect(gapped.rMultiple).toBeCloseTo(-2, 6);
+    expect(gapped.note).toContain('gapped through the stop');
+  });
+
+  it('fills a stop at the stop price when the candle did not gap', () => {
+    const clean = resolveOutcome({
+      ...base,
+      candles: [{ t: T0, h: 100.5, l: 97.5, c: 97.8, o: 100.4 }],
+    });
+    expect(clean.outcome).toBe('STOP');
+    expect(clean.price).toBe(98);
+    expect(clean.rMultiple).toBeCloseTo(-1, 6);
   });
 
   it('credits the NEAREST target when a candle trades through all of them', () => {
@@ -212,6 +260,49 @@ describe('resolveOutcome: expiry', () => {
     });
     expect(r.outcome).toBe('EXPIRED');
     expect(r.rMultiple).toBeCloseTo(0.5, 6); // (101-100)/2
+  });
+});
+
+describe('resolveOutcome: the trade\'s life', () => {
+  it('does not resolve a trade with a candle from after its life ended', () => {
+    // The trade has 24 hours (LEDGER.EXPIRY_HOURS). A candle 40 hours later
+    // that reaches the target must NOT resolve the trade — the strategy gave
+    // it 24 hours, and giving it 40 is a different strategy.
+    const late = T0 + 40 * 60 * 60_000;
+    const r = resolveOutcome({
+      ...base,
+      candles: [
+        bar(0, 100.5, 99.5, 100),
+        { t: late, h: 105, l: 100, c: 104 },
+      ],
+      now: late + 60_000,
+    });
+    expect(r.outcome).toBe('EXPIRED');
+    expect(r.rMultiple).not.toBe(2);
+  });
+
+  it('the expiry mark is the close at the end of the life, not the last close seen', () => {
+    // The last candle in the array is well past the life and at a very
+    // different price. The mark must be the close at the 24-hour boundary.
+    const lifeEnd = T0 + LEDGER.EXPIRY_HOURS * 3600_000;
+    const bars = 24 * 12; // one 5m bar per 5 minutes over 24 hours
+    const candles = Array.from({ length: bars + 24 }, (_, i) => ({
+      t: T0 + i * BAR, h: 100.5, l: 99.5, c: 100,
+    }));
+    // The candle right at the boundary closes at 101; the ones after close at 90.
+    candles[bars - 1] = { t: T0 + (bars - 1) * BAR, h: 101.5, l: 99.5, c: 101, o: 100 };
+    for (let i = bars; i < candles.length; i++) {
+      candles[i] = { t: T0 + i * BAR, h: 100, l: 89, c: 90, o: 95 };
+    }
+    const r = resolveOutcome({
+      ...base,
+      candles,
+      now: lifeEnd + 60 * 60_000,
+    });
+    expect(r.outcome).toBe('EXPIRED');
+    // (101 - 100) / 2 = 0.5 R — the close at the boundary, not the 90 print.
+    expect(r.rMultiple).toBeCloseTo(0.5, 6);
+    expect(r.price).toBe(101);
   });
 });
 

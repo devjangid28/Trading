@@ -325,8 +325,12 @@ describe('grade and checklist', () => {
 
 describe('ledger outcome resolution policy', () => {
   it('resolves same-candle stop and target as STOP', () => {
-    // This is asserted here so the policy is pinned even before the resolver
-    // exists. LEDGER.AMBIGUITY is the single source of truth for the choice.
+    // The CONSTANT is pinned, and — as of Part XV — it is genuinely read by the
+    // resolver: `resolveOutcome` branches on `LEDGER.AMBIGUITY`, so changing it
+    // to `TARGET_FIRST` changes behaviour. Before this, the only assertion was
+    // that the string equalled itself, which would have passed with the whole
+    // stop-first block deleted. The behavioural half of the claim lives in
+    // `ledger.test.ts > resolveOutcome: stop-first ambiguity`.
     expect(LEDGER.AMBIGUITY).toBe('STOP_FIRST');
   });
 

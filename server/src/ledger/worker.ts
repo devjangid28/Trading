@@ -1,8 +1,11 @@
-import type { AssetRow, Candle, SignalSnapshot } from '../../../shared/types';
-import { LEDGER } from '../config.js';
+import type { AssetRow, Candle, DataHealth, FeatureRecord, SignalSnapshot } from '../../../shared/types';
+import { LEDGER, SESSIONS_UTC } from '../config.js';
+import { buildFeatureRecord } from '../engine/featureStore.js';
 import {
-  freezeSignal, markResolved, openSignals, resolveOutcome, touchChecked, signalCount,
+  freezeSignal, markResolved, openSignals, resolveOutcome, saveOutcome, touchChecked, signalCount,
 } from './store.js';
+import { buildOutcomeRecord } from './outcomes.js';
+import { ENGINE_VERSION, FEATURE_SCHEMA_VERSION } from '../version.js';
 import { fetchKlines } from '../data/binance.js';
 
 /**
@@ -33,7 +36,87 @@ export interface FreezeReport {
 
 const MAX_FREEZE_PER_SCAN = 12;
 
-export function freezeFromScan(rows: AssetRow[], now = Date.now()): FreezeReport {
+/**
+ * Assemble the Phase XVI feature record, or `null` if that fails.
+ *
+ * Never throws out of the freeze path. A builder bug must not be able to stop the
+ * ledger recording a signal: the signal is the scarce artefact, the audit trail
+ * is reproducible from it.
+ */
+function safeFeatureRecord(
+  row: AssetRow,
+  now: number,
+  regime: SignalSnapshot['regime'],
+  mindRegime: string | undefined,
+  health: DataHealth | null = null,
+  breadth: string | null = null,
+): { featureRecord?: FeatureRecord } | null {
+  try {
+    const record = buildFeatureRecord({
+      row,
+      now,
+      health,
+      // The Mind classifier's six-state label when the pass ran, falling back to
+      // the engine's five-state regime. Both are real market state; the string
+      // `'unknown'` would only appear if neither existed, and then it is the
+      // truth rather than a default.
+      regime: mindRegime ?? String(regime),
+      sessionFor: sessionForUtcHour,
+      // Breadth is a scan-level property, not a per-row one, so it is threaded in
+      // via extras rather than invented here.
+      breadth,
+    });
+    return { featureRecord: record };
+  } catch (err) {
+    console.warn(`[ledger] feature record unavailable for ${row.base}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * UTC hour → session label.
+ *
+ * Ordered by start and the FIRST match wins, because the windows overlap on
+ * purpose (Asia runs 0-8, Europe 7-16, US 13-22): those are the real trading
+ * sessions and a candle at 07:30 genuinely belongs to both. Assigning one is a
+ * labelling convenience, so the earliest-starting session wins deterministically
+ * and a reader can reproduce it.
+ */
+function sessionForUtcHour(hour: number): string {
+  const windows = [
+    { name: 'asia', range: SESSIONS_UTC.asia },
+    { name: 'europe', range: SESSIONS_UTC.europe },
+    { name: 'us', range: SESSIONS_UTC.us },
+  ];
+  for (const w of windows) {
+    if (hour >= w.range[0] && hour < w.range[1]) return w.name;
+  }
+  return 'off';
+}
+
+/**
+ * @param regime The market regime the signal was emitted under. **Required**,
+ *   and there is deliberately no default.
+ *
+ *   It used to be read as `(row as any).regime ?? 'range'`. `AssetRow` has no
+ *   `regime` field, so that expression was ALWAYS `'range'` for every signal ever
+ *   frozen. `ledgerStats().byRegime` therefore returned one bucket that described
+ *   nothing, while the docs described it as regime performance. A default here
+ *   is worse than a compile error: it manufactures a plausible-looking grouping.
+ */
+export function freezeFromScan(
+  rows: AssetRow[],
+  now: number,
+  regime: SignalSnapshot['regime'],
+  /**
+   * Optional extras the row does not carry: the Mind regime label and the
+   * data-health verdict at scan time. Both are threaded through so the frozen
+   * record holds real market state instead of a placeholder — which is the whole
+   * point of freezing it. Absent them the record says `unknown`, which is the
+   * truth for a caller that genuinely did not supply them.
+   */
+  extras: { mindRegime?: string | undefined; health?: DataHealth | null; breadth?: string | null } = {},
+): FreezeReport {
   const report: FreezeReport = { frozen: 0, skippedExisting: 0, real: 0, shadow: 0 };
 
   // Real signals first: A then B.
@@ -76,7 +159,10 @@ export function freezeFromScan(rows: AssetRow[], now = Date.now()): FreezeReport
       side: row.side,
       components: c.components,
       checklist: c.checklist,
-      regime: (row as unknown as { regime?: SignalSnapshot['regime'] }).regime ?? 'range',
+      // Required, never defaulted. See the signature note: this used to be a
+      // `(row as any).regime ?? 'range'` that was always `'range'`, which made
+      // `byRegime` a single meaningless bucket for every signal ever frozen.
+      regime,
       setup: row.setup,
       plan,
       deriv: row.derivatives,
@@ -86,6 +172,44 @@ export function freezeFromScan(rows: AssetRow[], now = Date.now()): FreezeReport
       newsNis: row.newsDot?.nis ?? 0,
       newsDirection: row.newsDot?.direction ?? 0,
       vetoes: c.vetoes,
+      // The Mind verdict and the frozen feature vector, when the scanner ran the
+      // pass. Stored, never recomputed on read: a feature re-derived from later
+      // data is a different feature, and that is how a backtest quietly acquires
+      // look-ahead.
+      //
+      // The A/B freeze grades above are deliberately UNCHANGED. The Mind layer
+      // reports alongside them and does not decide what gets recorded — changing
+      // what the ledger collects before there is calibration data to justify it
+      // would destroy the very dataset the layer is being built to gather.
+      //
+      // Both halves are required. A verdict without its vector would be a
+      // number nobody can audit, and a vector without a verdict is just a pile of
+      // measurements — so a partial pair is stored as neither.
+      ...(row.mind && row.mindFeatures
+        ? {
+            mind: {
+              probability: row.mind.probability,
+              netExpectedR: row.mind.netExpectedR,
+              regime: row.mind.regime,
+              confidenceBand: row.mind.confidenceBand,
+              drivers: row.mind.drivers,
+              vetoCodes: row.mind.vetoes.map((v) => v.code),
+              rank: row.mind.rank,
+              features: row.mindFeatures,
+            },
+          }
+        : {}),
+      // ── The Phase XVI feature record ──
+      // Frozen alongside the vector. `mind.features` is what the scorer read;
+      // this is the auditable record of what the engine knew — versions, missing
+      // reasons, data-health state, and the setup/asset identity needed to group
+      // performance later. Assembled from already-frozen row state and never
+      // recomputed, so it cannot disagree with the decision.
+      //
+      // A builder failure must not stop a signal being recorded: losing the audit
+      // trail is bad, losing the observation is worse, because the observation is
+      // what the calibration set is made of. So it degrades to no record.
+      ...(safeFeatureRecord(row, now, regime, extras.mindRegime, extras.health ?? null, extras.breadth ?? null) ?? {}),
     };
 
     const id = freezeSignal(
@@ -164,7 +288,7 @@ export async function resolveOpenSignals(now = Date.now()): Promise<ResolveRepor
         stop: row.stop,
         targets: row.targets,
         riskPerUnit: row.risk_per_unit,
-        candles: bars.map((c) => ({ h: c.h, l: c.l, c: c.c, t: c.t })),
+        candles: bars.map((c) => ({ h: c.h, l: c.l, c: c.c, t: c.t, o: c.o })),
         createdAt: row.created_at,
         now,
       });
@@ -177,6 +301,46 @@ export async function resolveOpenSignals(now = Date.now()): Promise<ResolveRepor
       markResolved(row.id, res, now);
       report.resolved++;
       report.outcomes[res.outcome] = (report.outcomes[res.outcome] ?? 0) + 1;
+
+      // ── The Phase XVI outcome row ──
+      // Written here, next to the resolution, so the cost breakdown is computed
+      // from the same candle set that produced the outcome. Best-effort: a failure
+      // here must not roll back a resolution that already happened, so the signal
+      // row stands and the outcome row is simply absent — which the reports treat
+      // as "no cost-honest record", never as zero cost.
+      try {
+        const snap = row.snapshot as { plan?: { entryLow?: number; entryHigh?: number } | null; deriv?: { funding8h?: number; depth?: { spreadBps?: number } | null } | null } | null;
+        const entry =
+          snap?.plan && typeof snap.plan.entryLow === 'number' && typeof snap.plan.entryHigh === 'number'
+            ? (snap.plan.entryLow + snap.plan.entryHigh) / 2
+            : (row.entry_low + row.entry_high) / 2;
+        saveOutcome(
+          buildOutcomeRecord({
+            signalId: row.id,
+            outcome: res.outcome,
+            createdAt: row.created_at,
+            resolvedAt: now,
+            entry,
+            stop: row.stop,
+            riskPerUnit: row.risk_per_unit,
+            side: row.side,
+            bars: bars.filter((c) => c.t >= row.created_at),
+            priceAtResolve: res.price,
+            grossR: res.rMultiple ?? 0,
+            mfeR: res.mfeR,
+            maeR: res.maeR,
+            funding8h: snap?.deriv?.funding8h ?? null,
+            spreadBps: snap?.deriv?.depth?.spreadBps ?? null,
+            ambiguous: res.ambiguous,
+            engineVersion: ENGINE_VERSION,
+            featureSchemaVersion: FEATURE_SCHEMA_VERSION,
+          }),
+        );
+      } catch (err) {
+        console.warn(
+          `[ledger] outcome record failed for ${row.id}: ${(err as Error).message}`,
+        );
+      }
     }
   }
 

@@ -1,23 +1,58 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { api, usePolling, type CalendarResult } from './lib/api';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, usePolling, type CalendarResult, type HealthState } from './lib/api';
 import type { AssetRow, ScanResult } from '../shared/types';
-import { Board } from './components/Board';
-import { MarketPictureStrip } from './components/MarketPicture';
-import { SectorFlowPanel } from './components/SectorFlow';
 import { MacroStrip } from './components/MacroStrip';
 import { NewsImpactPanel } from './components/NewsImpactPanel';
 import { DerivativesTab } from './components/DerivativesTab';
 import { AttributionPanel } from './components/AttributionPanel';
-import { AssetPopup } from './components/AssetPopup';
 import { IndiaPanel } from './components/IndiaPanel';
+import { SectorFlowPanel } from './components/SectorFlow';
 import { Journal } from './components/Journal';
-import { Empty, FreshnessBadge, Panel, Spinner } from './components/ui';
+import { TicketPanel } from './components/TicketPanel';
+import { AssetPopup } from './components/AssetPopup';
+import { Empty, ModeBadge, Panel, Spinner, StreamNotice, type MarketMode } from './components/ui';
+import { MindHealthStrip, useMindHealth } from './components/MindBits';
+import './components/mind.css';
 import { BlackoutCountdown } from './components/BlackoutCountdown';
-import { ButterflyChart } from './components/ButterflyChart';
-import { PickPanel } from './components/PickPanel';
+import { GlobalSearch } from './components/GlobalSearch';
 import { useLiveStreamProvider, useLive } from './lib/liveContext';
+import { HomeView } from './home/HomeView';
+import { MarketsView } from './components/MarketsView';
+import { TerminalView } from './terminal/TerminalView';
+import { ChartsTerminal } from './charts/ChartsTerminal';
+import { DecisionRail } from './terminal/DecisionRail';
+import { StageView } from './stage/Stage';
+import { SignalsView } from './components/SignalsView';
+import { RadarView } from './components/RadarView';
+import { EngineLabView } from './lab/EngineLabView';
 
-type Tab = 'terminal' | 'derivatives' | 'news' | 'india' | 'journal' | 'learn';
+type Tab =
+  | 'dashboard'
+  | 'charts'
+  | 'heatmap'
+  | 'footprint'
+  | 'orderblock'
+  | 'signals'
+  | 'radar'
+  | 'markets'
+  | 'derivatives'
+  | 'news'
+  | 'india'
+  | 'journal'
+  | 'lab'
+  | 'learn';
+type TicketType = 'hero' | 'standard';
+
+const TAB_IDS: Tab[] = [
+  'dashboard', 'charts', 'heatmap', 'footprint', 'orderblock', 'signals', 'radar',
+  'markets', 'derivatives', 'news', 'india', 'journal', 'lab', 'learn',
+];
+
+function initialTab(): Tab {
+  if (typeof window === 'undefined') return 'dashboard';
+  const requested = new URLSearchParams(window.location.search).get('tab');
+  return TAB_IDS.includes(requested as Tab) ? (requested as Tab) : 'dashboard';
+}
 
 function useTheme() {
   const [dark, setDark] = useState(() => document.documentElement.classList.contains('dark'));
@@ -93,7 +128,7 @@ function LearnView() {
           <ul className="text-[11px] leading-relaxed mt-1.5 space-y-0.5" style={{ color: 'var(--muted)' }}>
             <li>Crypto OHLCV, tickers — Binance public REST, no key</li>
             <li>Indian equities and indices — Yahoo Finance chart API and NSE public endpoints</li>
-            <li>Market cap, dominance, Fear &amp; Greed — CoinGecko and alternative.me</li>
+            <li>Market cap, dominance, Fear & Greed — CoinGecko and alternative.me</li>
             <li>Stablecoin float — DefiLlama</li>
             <li>News — CoinDesk, Cointelegraph, Decrypt, Bitcoin Magazine, Bitcoin.com, CryptoSlate RSS</li>
           </ul>
@@ -103,251 +138,500 @@ function LearnView() {
   );
 }
 
+/**
+ * One icon per destination. Labels alone were fine when there were six tabs;
+ * eleven tabs of equal weight read as a wall of text at a glance. A 14px line
+ * icon gives each destination a shape without becoming decoration.
+ */
+function TabIcon({ id }: { id: Tab }) {
+  const common = {
+    width: 14,
+    height: 14,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.9,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  };
+  const paths: Record<Tab, ReactNode> = {
+    dashboard: <><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></>,
+    charts: <><path d="M4 4v16" /><path d="M8 8v8" /><path d="M12 5v14" /><path d="M16 9v6" /><path d="M20 7v10" /></>,
+    heatmap: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 9v12M15 9v12M3 15h18" /></>,
+    footprint: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 8h18M3 12h18M3 16h18M9 8v12" /></>,
+    markets: <><path d="M3 20V10" /><path d="M9 20V4" /><path d="M15 20v-7" /><path d="M21 20V7" /></>,
+    orderblock: <><path d="M12 2 3 7l9 5 9-5-9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>,
+    signals: <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />,
+    radar: <><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /><path d="M12 12 18 6" /></>,
+    derivatives: <><path d="M3 12h4l2-7 4 14 2-7h6" /></>,
+    news: <><path d="M4 5h13v14H5a2 2 0 0 1-2-2V7" /><path d="M17 8h2a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2" /><path d="M7 9h7M7 13h7M7 17h4" /></>,
+    india: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18" /><path d="M12 3a15 15 0 0 0 0 18" /></>,
+    journal: <><path d="M5 4h14v16H5z" /><path d="M9 4v16" /><path d="M13 8h3M13 12h3" /></>,
+    lab: <><path d="M9 3h6" /><path d="M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3" /><path d="M7.5 15h9" /></>,
+    learn: <><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.35-1 .9-1 1.7" /><path d="M12 17h.01" /></>,
+  };
+  return <svg {...common}>{paths[id]}</svg>;
+}
+
 export default function App() {
+  // Dev-only render counter, read by qa/render-count.spec.ts to prove that a
+  // burst of live ticks does not re-render the app shell. Stripped from prod.
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    const w = window as unknown as { __ofAppRenders?: number };
+    w.__ofAppRenders = (w.__ofAppRenders ?? 0) + 1;
+  }
+
   const { dark, toggle } = useTheme();
-  const [tab, setTab] = useState<Tab>('terminal');
+  // Polls itself at 60s. Deliberately not gated on a visited tab: the model
+  // health is global, and a header that is blank until someone opens Signals
+  // would make the rest of the strip look broken rather than un-fetched.
+  const mindHealth = useMindHealth(60_000);
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const [railOpen, setRailOpen] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  // Tabs that have been opened at least once. Feeds which are only needed by a
-  // specific tab are held back until then, so the first load is not crowded by
-  // the NSE/Yahoo pull and the attribution pass competing with the scan.
-  const [visited, setVisited] = useState<Record<string, boolean>>({ terminal: true });
+  const [terminalSymbol, setTerminalSymbol] = useState(() => {
+    try {
+      const saved = localStorage.getItem('of-terminal-symbol');
+      return saved && /^[A-Z0-9]{2,20}$/.test(saved) ? saved : 'BTCUSDT';
+    } catch {
+      return 'BTCUSDT';
+    }
+  });
+  const [ticketType, setTicketType] = useState<TicketType>('standard');
+  /**
+   * Which instrument has the full candlestick popup open.
+   *
+   * `AssetPopup` wraps `CandleChart` ΓÇö the real OHLCV chart with the order-block
+   * box, Z, S1/R1, liquidity targets, VWAP, context levels, a crosshair and an
+   * OHLC readout. It was written but never mounted, so the best chart in the
+   * codebase was unreachable and the ticket was drawing fabricated candles
+   * instead. `null` means closed.
+   */
+  const [chartFor, setChartFor] = useState<string | null>(null);
+  const [visited, setVisited] = useState<Record<string, boolean>>({ dashboard: true });
   useEffect(() => {
     setVisited((v) => (v[tab] ? v : { ...v, [tab]: true }));
   }, [tab]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('of-terminal-symbol', terminalSymbol);
+    } catch {
+      /* storage blocked */
+    }
+  }, [terminalSymbol]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (tab === 'heatmap') return;
+      const target = event.target as HTMLElement | null;
+      if (target && /INPUT|TEXTAREA|SELECT/.test(target.tagName)) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key.toLowerCase() !== 'p') return;
+      event.preventDefault();
+      setRailOpen((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab]);
+
   const scan = usePolling<ScanResult>((s) => api.scan(s), 60_000);
+  const health = usePolling<HealthState>((s) => api.health(s), 30_000);
+  const mockMode = health.data?.mock?.active === true;
   const news = usePolling((s) => api.news(s), 120_000);
   const macro = usePolling((s) => api.macro(s), 120_000);
   const india = usePolling((s) => api.india(s), 180_000, [], visited.india === true);
   const attribution = usePolling((s) => api.attributionAll(s), 120_000, [], visited.news === true);
-  // The countdown is long-lived: event times do not change minute to minute,
-  // so polling it on the scan cadence would be wasted requests. The component
-  // itself ticks locally off the server timestamp.
   const calendar = usePolling<CalendarResult>((s) => api.calendar(s), 300_000);
   const nextBlackout = calendar.data?.nextBlackout ?? null;
 
-  // One SSE socket for the whole app. Mounted before the panels so the price
-  // overlay is available to every consumer; polling stays as the fallback if
-  // the socket never opens.
-  useLiveStreamProvider(scan.data);
+  // The low-frequency live board. `useLive()` reads the module store that
+  // `useLiveStreamProvider` publishes to; on the first render it is the value
+  // from a previous mount (or empty), then the provider's effects fill it in.
   const live = useLive();
-  // Prefer the pushed scan; fall back to the polled one until the socket's
-  // first snapshot arrives.
   const scanData = live.scan ?? scan.data;
-
   const data = scanData;
-  const rows: AssetRow[] = useMemo(
+
+  /**
+   * A ban is materially different from ordinary staleness: the board is not
+   * "refreshing", it will not refresh at all until the window closes, and the
+   * engine is deliberately sending nothing. The UI says so rather than showing
+   * an amber "cached · refreshing" chip that would never resolve.
+   */
+  const banned = Boolean(data?.reason?.startsWith('BANNED'));
+  const allRows: AssetRow[] = useMemo(
     () => (data ? [...data.bullish, ...data.bearish] : []),
     [data],
   );
-  const selectedRow = rows.find((r) => r.id === selected) ?? null;
-  const sectorAvg = useMemo(
-    () => data?.sectors.find((s) => s.sector === selectedRow?.sector)?.avgChange ?? null,
-    [data, selectedRow],
-  );
+  const selectedRow = allRows.find((r) => r.id === selected) ?? null;
+
+  /**
+   * The row the open chart popup belongs to, and the sector-average the
+   * alignment check needs. Computed from the same `allRows` the board renders,
+   * so the popup's "sector leans the same way" tick can never disagree with the
+   * board it was opened from.
+   */
+  const chartRow = allRows.find((r) => r.id === chartFor) ?? null;
+  const chartSectorAvg = useMemo(() => {
+    if (!chartRow) return null;
+    const peers = allRows.filter((r) => r.sector === chartRow.sector);
+    if (peers.length === 0) return null;
+    return peers.reduce((sum, r) => sum + r.changePct, 0) / peers.length;
+  }, [chartRow, allRows]);
+
+  /**
+   * What the SSE subscription is actually for. The server pushes ticks for
+   * only these symbols to this client (POST /api/stream/visible), which is most
+   * of the stream bandwidth: ~150 tracked symbols arrive every second but only
+   * the visible board (plus any selected row) is ever rendered. `selected` is
+   * included so the ticket keeps ticking the moment it is opened, before the
+   * next board refresh has added it.
+   */
+  const visibleSymbols = useMemo(() => {
+    // `null`, not `[]`, before the first board lands. An empty array is a valid
+    // subscription meaning "render none of these", so posting it would tell the
+    // server to push zero ticks — the ticker would sit dead through the whole
+    // first scan and then snap alive. `null` means "all symbols", which is the
+    // correct thing to want when nothing is rendered yet.
+    if (!data) return null;
+    const set = new Set<string>();
+    for (const r of allRows) set.add(`${r.base}USDT`);
+    if (selected) set.add(`${selected.replace(/USDT$/, '')}USDT`);
+    // The global Decision & DOM rail can show a symbol that is not on today's
+    // board. Keep its ticks flowing on every page, not only the chart pages.
+    set.add(terminalSymbol);
+    return [...set];
+  }, [data, allRows, selected, terminalSymbol]);
+
+  useLiveStreamProvider(scan.data, visibleSymbols);
+
+  /**
+   * The persistent source mode. Freshness (LIVE/DELAYED/STALE) says how old a
+   * panel's data is; this says where it comes from at all — and unlike the old
+   * hard-coded "LIVE 24/7" pill, it cannot claim a live market while replaying
+   * fixtures, banned upstream, or disconnected.
+   */
+  const mode: MarketMode = mockMode
+    ? 'MOCK'
+    : banned
+      ? 'BANNED'
+      : live.state === 'open'
+        ? 'LIVE'
+        : 'OFFLINE';
+  const modeDetail = mockMode
+    ? 'Fixture replay — this is NOT the live market'
+    : banned
+      ? `Upstream host blocked us: ${data?.reason ?? 'no fresh scan until the window closes'}`
+      : live.state === 'open'
+        ? 'Connected to the live exchange feed'
+        : `Stream ${live.state} — figures are from the last successful poll`;
 
   const open = useCallback((id: string) => {
     setSelected(id.endsWith('USDT') ? id.replace(/USDT$/, '') : id);
+    setTicketType('standard');
   }, []);
 
-  const biasMeta =
-    data?.breadthBias === 'bullish'
-      ? { text: 'One-sided bullish', color: 'var(--color-up)' }
-      : data?.breadthBias === 'bearish'
-        ? { text: 'One-sided bearish', color: 'var(--color-down)' }
-        : { text: 'Two-way day', color: 'var(--color-amber)' };
+  const openHero = useCallback((row: AssetRow) => {
+    setSelected(row.id);
+    setTicketType('hero');
+  }, []);
+
+  const openSymbol = useCallback((symbol: string) => {
+    setSelected(symbol);
+    setTicketType('standard');
+  }, []);
+
+  const openOrderBlock = useCallback((row: AssetRow) => {
+    setSelected(row.id);
+    setTerminalSymbol(row.pair);
+    setTicketType('hero');
+    setTab('orderblock');
+  }, []);
+
+  /**
+   * A global-search hit. Board coins open the full order-block experience; a
+   * coin that is not on today's board opens its chart instead. Either way the
+   * search is a real destination, not a no-op.
+   */
+  const openSearchHit = useCallback((base: string) => {
+    const row = allRows.find((r) => r.base === base || r.id === base) ?? null;
+    if (row) {
+      openOrderBlock(row);
+    } else {
+      setSelected(base);
+      setTerminalSymbol(base.endsWith('USDT') ? base : `${base}USDT`);
+      setTab('charts');
+    }
+  }, [allRows, openOrderBlock]);
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'terminal', label: 'Terminal' },
-    { id: 'derivatives', label: 'Derivatives' },
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'charts', label: 'Charts' },
+    { id: 'heatmap', label: 'Heatmap' },
+    { id: 'footprint', label: 'Footprint' },
+    { id: 'orderblock', label: 'Order Block' },
+    { id: 'signals', label: 'Signals' },
+    { id: 'radar', label: 'Radar' },
     { id: 'news', label: 'News' },
     { id: 'india', label: 'India' },
-    { id: 'journal', label: 'Journal' },
-    { id: 'learn', label: 'How it works' },
   ];
+
+  if (tab === 'heatmap' || tab === 'footprint') {
+    return (
+      <div className="tradfye-standalone">
+        <TerminalView
+          view={tab}
+          symbol={terminalSymbol}
+          onSymbol={setTerminalSymbol}
+          mode={mode}
+          rows={allRows}
+          onExit={() => setTab('dashboard')}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full flex flex-col" style={{ background: 'var(--bg)' }}>
-      {/* Header */}
-      <header
-        className="sticky top-0 z-30 flex items-center gap-3 px-3 py-2 border-b"
-        style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}
-      >
-        <div className="flex items-baseline gap-2 shrink-0">
-          <span className="text-[15px] font-bold tracking-tight">OrderFlow</span>
-          <span className="text-[10px] hidden sm:inline" style={{ color: 'var(--faint)' }}>
-            order blocks · liquidity · news impact
-          </span>
+      <header className="app-header">
+        <div className="app-topbar">
+          <div className="app-brand">
+            <span className="app-logo" aria-hidden="true">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 18V9" />
+                <path d="M9 18V5" />
+                <path d="M14 18v-6" />
+                <path d="M19 18V8" />
+              </svg>
+            </span>
+            <span className="app-brand-text">
+              <span className="app-name">OrderFlow</span>
+              <span className="app-tagline hidden md:inline">Order blocks · liquidity · news impact</span>
+            </span>
+          </div>
+
+          <GlobalSearch onOpen={openSearchHit} />
+
+          <div className="app-topbar-actions">
+            {data?.stale && (
+              <span
+                className="chip shrink-0"
+                style={{
+                  color: banned ? 'var(--color-down)' : 'var(--color-amber)',
+                  background: 'var(--panel-2)',
+                }}
+                title={data.reason || 'Showing the last saved board while a fresh scan runs.'}
+              >
+                {banned ? 'BANNED · stale' : 'cached · refreshing'}
+              </span>
+            )}
+
+            {nextBlackout && <BlackoutCountdown next={nextBlackout} />}
+            <StreamNotice />
+            <ModeBadge mode={mode} detail={modeDetail} />
+
+            {/* The Mind strip lives in the header, above every tab, because the
+                regime and the Brier score are properties of the *model* rather
+                than of one screen. A probability on a Signals card means nothing
+                without the calibration figures that sit next to this. */}
+            <MindHealthStrip health={mindHealth} />
+
+            <button
+              type="button"
+              onClick={toggle}
+              className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-[13px]"
+              style={{ background: 'var(--panel-2)', color: 'var(--muted)', border: '1px solid var(--border)' }}
+              aria-label="Toggle theme"
+              title="Toggle light / dark theme"
+            >
+              {dark ? '☀' : '☾'}
+            </button>
+          </div>
         </div>
 
-        <nav className="flex items-center gap-0.5 overflow-x-auto flex-1 min-w-0">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className="px-2.5 py-1 rounded-md text-[12px] font-medium whitespace-nowrap shrink-0"
-              style={
-                tab === t.id
-                  ? { background: 'var(--panel-2)', color: 'var(--text)' }
-                  : { color: 'var(--muted)' }
-              }
-            >
-              {t.label}
-              {t.id === 'news' && news.data && news.data.counts.CRITICAL > 0 && (
-                <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full" style={{ background: 'var(--color-down)' }} />
-              )}
-            </button>
-          ))}
-        </nav>
+        <div className="app-navbar">
+          <nav className="app-tabs" aria-label="Sections">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`app-tab${tab === t.id ? ' is-active' : ''}`}
+                aria-current={tab === t.id ? 'page' : undefined}
+              >
+                <TabIcon id={t.id} />
+                <span>{t.label}</span>
+                {t.id === 'news' && news.data && news.data.counts.CRITICAL > 0 && (
+                  <span className="app-tab-dot" aria-label="critical news" />
+                )}
+              </button>
+            ))}
+          </nav>
+        </div>
 
-        {nextBlackout && <BlackoutCountdown next={nextBlackout} />}
-
-        {data?.stale && (
-          <span
-            className="chip shrink-0"
-            style={{ color: 'var(--color-amber)', background: 'var(--panel-2)' }}
-            title={data.reason || 'Showing the last saved board while a fresh scan runs.'}
-          >
-            cached · refreshing
-          </span>
+        {/*
+          Fix 3. Unmissable and sticky: mock data must never be mistaken for a
+          live market, and the cheapest place for that to go wrong is someone
+          screenshotting a board during development.
+        */}
+        {mockMode && (
+          <div role="alert" className="app-banner mock">
+            <strong>MOCK DATA</strong>
+            <span style={{ fontWeight: 500 }}>
+              {health.data?.mock.fixtures ?? 0} fixtures replayed from disk. This is not the live market.
+            </span>
+          </div>
         )}
 
-        <FreshnessBadge ageMs={live.lastDataAt === null ? null : Date.now() - live.lastDataAt} />
-
-        <button
-          type="button"
-          onClick={toggle}
-          className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-[13px]"
-          style={{ background: 'var(--panel-2)', color: 'var(--muted)' }}
-          aria-label="Toggle theme"
-          title="Toggle theme"
-        >
-          {dark ? '☀' : '☾'}
-        </button>
+        {banned && data?.reason && (
+          <div role="alert" className="app-banner banned">
+            {data.reason}
+          </div>
+        )}
       </header>
 
       {/* Macro strip */}
-      <div className="border-b shrink-0" style={{ background: 'var(--panel)', borderColor: 'var(--border)' }}>
-        <MacroStrip macro={macro.data} />
+      <div className="macro-bar">
+        <div className="overflow-x-auto">
+          <div className="macro-bar-inner">
+            <span className="macro-strip-label">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                <path d="M4 19V5" />
+                <path d="M4 19h16" />
+                <path d="M8 16v-5" />
+                <path d="M12 16V8" />
+                <path d="M16 16v-3" />
+              </svg>
+              Macro
+            </span>
+            <MacroStrip macro={macro.data} tracked={data?.totalScanned ?? 0} />
+          </div>
+        </div>
       </div>
 
       {/* Main */}
-      <main className="flex-1 min-h-0 p-2 lg:p-3">
+      <main className="flex-1 min-h-0 p-3 lg:p-4">
+        <div className={`app-main${railOpen ? ' has-rail' : ''}`}>
+          <div className="app-main-page">
         {scan.error && !data && (
           <Empty message="Could not reach the engine." hint={scan.error} />
         )}
 
-        {tab === 'terminal' && (
-          <div className="grid gap-2 lg:gap-3 lg:grid-cols-[1fr_320px]" style={{ height: '100%' }}>
-            <div className="flex flex-col gap-2 lg:gap-3 min-h-0">
+        {tab === 'dashboard' && data && (
+          <HomeView
+            data={data}
+            mode={mode}
+            onOpenOrderBlock={openOrderBlock}
+            onNavigate={setTab}
+            // A8: the tracked-asset count comes from the scan's own universe
+            // figure with its source, never from a bare CoinGecko field that
+            // is null whenever the aggregator is rate limited.
+            trackedAssets={data.totalScanned}
+            trackedSource={`order flow universe · ${data.totalScanned} scanned`}
+          />
+        )}
+
+        {tab === 'markets' && (
+          <MarketsView onSelect={openSymbol} />
+        )}
+
+        {tab === 'charts' && (
+          <ChartsTerminal symbol={terminalSymbol} onSymbol={setTerminalSymbol} />
+        )}
+
+        {tab === 'orderblock' && data && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/*
+              The stage is a fixed 1920x1200 canvas: at laptop widths its labels
+              are legible but unlabelled, and the levels inside a ticket mean
+              nothing without a key. This bar stays outside the scaled canvas so
+              it renders at normal type size on every screen.
+            */}
+            <section className="stage-intro" aria-label="How to read the order-block board">
+              <div>
+                <h2>Order Block</h2>
+                <p>
+                  The strongest bullish and bearish names, ranked by one-directional strength.
+                  Each tile is one closed-candle setup — click it to load its ticket below, or
+                  open the full chart for every level.
+                </p>
+              </div>
+              <ul className="stage-legend" aria-label="Legend">
+                <li><b className="lg-z">Z</b> zone midpoint</li>
+                <li><b className="lg-inv">S1 / R1</b> invalidation</li>
+                <li><b className="lg-t">R1–R2</b> liquidity ahead</li>
+                <li><b className="lg-fan">fan</b> 24h paths · hover a thread</li>
+              </ul>
+            </section>
+
+            <StageView
+              data={data}
+              selected={selected}
+              onSelect={openSymbol}
+              onHero={(symbol) => {
+                const row = [...data.bullish, ...data.bearish].find((r) => r.base === symbol || r.id === symbol);
+                if (row) openHero(row);
+                else openSymbol(symbol);
+              }}
+              onClear={() => setSelected(null)}
+            />
+
+            {/* Detailed ticket popup for the selected row */}
+            {selectedRow && (
               <Panel
-                title="Market picture"
-                subtitle={
-                  data
-                    ? `${data.totalScanned} pairs tracked · ${biasMeta.text} · leading ${
-                        data.market.leadingSector ?? '—'
-                      } · lagging ${data.market.laggingSector ?? '—'}`
-                    : 'Loading…'
-                }
+                title={`${selectedRow.base} · ${selectedRow.name}`}
+                subtitle={`${selectedRow.sector} · ${selectedRow.side === 'bullish' ? 'Bullish' : 'Bearish'} setup · ${selectedRow.setup?.ageMinutes ?? '—'}m old`}
+                className="h-auto max-h-[520px]"
                 right={
-                  data && (
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className="up font-semibold">▲ {data.market.bullishCount}</span>
-                      <span className="down font-semibold">▼ {data.market.bearishCount}</span>
-                      <button
-                        type="button"
-                        onClick={scan.refresh}
-                        className="px-2 py-0.5 rounded"
-                        style={{ background: 'var(--panel-2)', color: 'var(--muted)' }}
-                      >
-                        Refresh
-                      </button>
-                    </div>
-                  )
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setChartFor(selectedRow.base)}
+                      data-testid="open-chart"
+                      className="px-2 py-1 rounded text-[10px]"
+                      style={{ background: 'var(--panel-2)', color: 'var(--muted)' }}
+                    >
+                      Full chart
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTicketType(ticketType === 'hero' ? 'standard' : 'hero')}
+                      className="px-2 py-1 rounded text-[10px]"
+                      style={{ background: 'var(--panel-2)', color: 'var(--muted)' }}
+                    >
+                      {ticketType === 'hero' ? 'Compact' : 'Expanded'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelected(null)}
+                      className="px-2 py-1 rounded text-[10px]"
+                      style={{ background: 'var(--panel-2)', color: 'var(--muted)' }}
+                    >
+                      Close
+                    </button>
+                  </div>
                 }
               >
-                {data ? (
-                  <>
-                    <ButterflyChart
-                      data={data.butterfly}
-                      picks={new Set(rows.filter((r) => r.isPick).map((r) => r.base))}
-                    />
-                    <div className="mt-1.5 pt-1.5 border-t" style={{ borderColor: 'var(--border)' }}>
-                      <MarketPictureStrip market={data.market} onPick={open} />
-                    </div>
-                  </>
-                ) : (
-                  <Spinner />
-                )}
+                <TicketPanel
+                  row={selectedRow}
+                  onClose={() => setSelected(null)}
+                  type={ticketType}
+                />
               </Panel>
+            )}
+          </div>
+        )}
 
-              <div className="grid md:grid-cols-2 gap-2 lg:gap-3 shrink-0">
-                <Panel
-                  title="Top 3 bullish"
-                  subtitle="Highest-ranked setups, with why each is or is not a pick"
-                  className="min-h-0"
-                >
-                  {data ? (
-                    <PickPanel
-                      rows={data.bullish}
-                      side="bullish"
-                      prices={live.prices}
-                      selected={selected}
-                      onSelect={(r) => open(r.id)}
-                    />
-                  ) : <Spinner />}
-                </Panel>
-                <Panel
-                  title="Top 3 bearish"
-                  subtitle="Highest-ranked setups, with why each is or is not a pick"
-                  className="min-h-0"
-                >
-                  {data ? (
-                    <PickPanel
-                      rows={data.bearish}
-                      side="bearish"
-                      prices={live.prices}
-                      selected={selected}
-                      onSelect={(r) => open(r.id)}
-                    />
-                  ) : <Spinner />}
-                </Panel>
-              </div>
+        {tab === 'signals' && (
+          <div className="panel h-full overflow-hidden" style={{ padding: 12 }}>
+            <SignalsView />
+          </div>
+        )}
 
-              <div className="grid md:grid-cols-2 gap-2 lg:gap-3 min-h-0 flex-1">
-                <Panel title="Bullish" subtitle="Strongest one-directional moves first" className="min-h-[280px]">
-                  {data ? (
-<Board
-                      rows={data.bullish}
-                      side="bullish"
-                      prices={live.prices}
-                      selected={selected}
-                      onSelect={(r) => open(r.id)}
-                    />
-                  ) : (
-                    <Spinner />
-                  )}
-                </Panel>
-                <Panel title="Bearish" subtitle="Strongest one-directional moves first" className="min-h-[280px]">
-                  {data ? (
-<Board
-                      rows={data.bearish}
-                      side="bearish"
-                      prices={live.prices}
-                      selected={selected}
-                      onSelect={(r) => open(r.id)}
-                    />
-                  ) : (
-                    <Spinner />
-                  )}
-                </Panel>
-              </div>
-            </div>
-
-            <Panel title="Sector flow" subtitle="Average move of each sector's coins" className="min-h-[260px]">
-              {data ? <SectorFlowPanel sectors={data.sectors} onSelect={open} /> : <Spinner />}
-            </Panel>
+        {tab === 'radar' && (
+          <div className="panel h-full overflow-hidden" style={{ padding: 12 }}>
+            <RadarView />
           </div>
         )}
 
@@ -382,10 +666,10 @@ export default function App() {
               title="Indian market"
               subtitle={india.data?.session.message ?? 'NSE indices, session state and the F&O strength board'}
             >
-              {india.loading && !india.data ? <Spinner label="Loading NSE…" /> : <IndiaPanel india={india.data} onSelect={open} />}
+              {india.loading && !india.data ? <Spinner label="Loading NSE…" /> : <IndiaPanel india={india.data} onSelect={openSymbol} />}
             </Panel>
             <Panel title="Sector flow" subtitle="From the crypto board, for contrast">
-              {data ? <SectorFlowPanel sectors={data.sectors} onSelect={open} /> : <Spinner />}
+              {data ? <SectorFlowPanel sectors={data.sectors} onSelect={openSymbol} /> : <Spinner />}
             </Panel>
           </div>
         )}
@@ -406,20 +690,42 @@ export default function App() {
           </div>
         )}
 
+        {tab === 'lab' && (
+          <div className="panel h-full overflow-hidden" style={{ padding: 0 }}>
+            <EngineLabView />
+          </div>
+        )}
+
         {tab === 'learn' && (
           <div className="panel h-full overflow-hidden">
             <LearnView />
           </div>
         )}
+          </div>
+          <DecisionRail
+            symbol={terminalSymbol}
+            rows={allRows}
+            mode={mode}
+            open={railOpen}
+            onOpen={() => setRailOpen(true)}
+            onClose={() => setRailOpen(false)}
+          />
+        </div>
       </main>
 
-      {selected && (
+      {/*
+        The full candlestick chart. Mounted above every tab rather than inside
+        one, because the chart belongs to an instrument, not to a view ΓÇö a setup
+        opened from the Derivatives or News tab deserves the same chart as one
+        opened from the board.
+      */}
+      {chartFor && (
         <AssetPopup
-          assetId={selected}
-          row={selectedRow}
+          assetId={chartFor}
+          row={chartRow}
           breadthBias={data?.breadthBias ?? 'two-way'}
-          sectorAvgChange={sectorAvg}
-          onClose={() => setSelected(null)}
+          sectorAvgChange={chartSectorAvg}
+          onClose={() => setChartFor(null)}
         />
       )}
     </div>

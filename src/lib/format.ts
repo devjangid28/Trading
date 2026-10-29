@@ -63,6 +63,29 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+const IST_OFFSET_MIN = 330;
+
+/** Wall-clock time in IST (UTC+05:30, no DST) as HH:MM:SS. */
+export function istStamp(ts: number): string {
+  const d = new Date(ts + IST_OFFSET_MIN * 60_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** IST wall clock with seconds, for the live header clock. */
+export function istClock(ts: number): string {
+  const d = new Date(ts + IST_OFFSET_MIN * 60_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
+/** IST date key shaped like NSE's DD-Mon-YYYY. */
+export function istDate(ts: number): string {
+  const d = new Date(ts + IST_OFFSET_MIN * 60_000);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
 export function niceTicks(min: number, max: number, count = 5): number[] {
   if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return [min];
   const span = max - min;
@@ -75,3 +98,14 @@ export function niceTicks(min: number, max: number, count = 5): number[] {
   for (let v = start; v <= max + step * 0.001; v += step) out.push(v);
   return out;
 }
+
+export function humanizeDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return '0s';
+  if (ms < 1_000) return 'under 1s';
+  if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1_000);
+  if (secs === 0 || secs === 60) return `${mins} min`;
+  return `${mins}m ${secs}s`;
+}
+export const fmtDuration = humanizeDuration;

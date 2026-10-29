@@ -22,6 +22,8 @@ export interface DerivRaw {
   fundingIntervalH: number;
   nextFundingTime: number;
   openInterest: number;
+  /** Venue-reported OI notional in USD, when the venue supplies it directly. */
+  oiUsd?: number;
 }
 
 export interface OiHist {
@@ -58,7 +60,11 @@ async function fundingIntervals(): Promise<Map<string, number>> {
   return cached('deriv:fundingInfo', REFRESH.DERIVATIVES_SNAPSHOT_MS, async () => {
     const res = await fetchJson<{ symbol: string; fundingIntervalHours: number }[]>(
       `${F}/fapi/v1/fundingInfo`,
-      { label: 'binance fundingInfo', retries: 1 },
+      {
+        label: 'binance fundingInfo',
+        retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+        timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+      },
     );
     const m = new Map<string, number>();
     for (const r of res ?? []) {
@@ -86,23 +92,39 @@ export function futuresSymbolCandidates(base: string): string[] {
   return candidates;
 }
 
+/**
+ * Bybit uses the same 1000x convention for some meme perps but puts the
+ * multiplier in different places: 1000PEPEUSDT, but SHIB1000USDT. Return every
+ * placement and let the live ticker map decide which one exists.
+ */
+export function bybitSymbolCandidates(base: string): string[] {
+  const direct = `${base}USDT`;
+  return [direct, `1000${direct}`, `${base}1000USDT`, `10000${direct}`];
+}
+
 export const binanceFutures: DerivativesProvider = {
   name: 'binance-futures',
 
   async snapshot(symbols) {
     if (!symbols.length) return [];
-    const intervals = await fundingIntervals().catch(() => new Map<string, number>());
     const out: DerivRaw[] = [];
 
     // premiumIndex returns the mark for every perp in one call, but OI is
-    // per-symbol. Pull premiumIndex once, then OI in small batches.
+    // per-symbol. Pull premiumIndex once, then OI in small batches. It runs
+    // before fundingInfo so an unreachable futures host fails in one short
+    // attempt instead of stacking two full timeouts before the fallback.
     const CONC = 8;
     const premium = await cached('deriv:premiumIndex', REFRESH.DERIVATIVES_SNAPSHOT_MS, async () => {
       const res = await fetchJson<
         { symbol: string; markPrice: string; indexPrice: string; lastFundingRate: string; nextFundingTime: number }[]
-      >(`${F}/fapi/v1/premiumIndex`, { label: 'binance premiumIndex', retries: 1 });
+      >(`${F}/fapi/v1/premiumIndex`, {
+        label: 'binance premiumIndex',
+        retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+        timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+      });
       return new Map((res ?? []).map((r) => [r.symbol, r]));
     });
+    const intervals = await fundingIntervals().catch(() => new Map<string, number>());
 
     // Resolve each requested spot pair to the perp symbol that actually exists.
     const resolved = symbols.map((s) => {
@@ -123,7 +145,11 @@ export const binanceFutures: DerivativesProvider = {
             () =>
               fetchJson<{ openInterest: string; time: number }>(
                 `${F}/fapi/v1/openInterest?symbol=${actual}`,
-                { label: `oi ${actual}`, retries: 1 },
+                {
+                  label: `oi ${actual}`,
+                  retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+                  timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+                },
               ),
           );
           const oiNum = Number(oi.openInterest);
@@ -155,7 +181,11 @@ export const binanceFutures: DerivativesProvider = {
       () =>
         fetchJson<{ timestamp: number; sumOpenInterest: string; sumOpenInterestValue: string }[]>(
           `${F}/futures/data/openInterestHist?symbol=${symbol}&period=${period}&limit=${Math.min(limit, 500)}`,
-          { label: `oiHist ${symbol}`, retries: 1 },
+          {
+            label: `oiHist ${symbol}`,
+            retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+            timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+          },
         ),
     );
     const arr = res ?? [];
@@ -176,17 +206,29 @@ export const binanceFutures: DerivativesProvider = {
       cached(`deriv:ls:${symbol}`, REFRESH.LONG_SHORT_RATIO_MS, () =>
         fetchJson<{ timestamp: number; longShortRatio: string }[]>(
           `${F}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=${period}&limit=30`,
-          { label: `ls ${symbol}`, retries: 1 },
+          {
+            label: `ls ${symbol}`,
+            retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+            timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+          },
         )),
       cached(`deriv:lsTop:${symbol}`, REFRESH.LONG_SHORT_RATIO_MS, () =>
         fetchJson<{ timestamp: number; longShortRatio: string }[]>(
           `${F}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=${period}&limit=30`,
-          { label: `lsTop ${symbol}`, retries: 1 }),
+          {
+            label: `lsTop ${symbol}`,
+            retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+            timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+          }),
       ),
       cached(`deriv:taker:${symbol}`, REFRESH.LONG_SHORT_RATIO_MS, () =>
         fetchJson<{ timestamp: number; buySellRatio: string; buyVol: string; sellVol: string }[]>(
           `${F}/futures/data/takerlongshortRatio?symbol=${symbol}&period=${period}&limit=30`,
-          { label: `taker ${symbol}`, retries: 1 },
+          {
+            label: `taker ${symbol}`,
+            retries: DERIVATIVES.BINANCE_FUT_RETRIES,
+            timeoutMs: DERIVATIVES.BINANCE_FUT_TIMEOUT_MS,
+          },
         )),
     ]);
 
@@ -264,31 +306,181 @@ async function postHyperliquid(): Promise<HyperRow[]> {
   }
 }
 
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Bybit â€” cross-venue comparison. [PROBED] OK
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Bybit - primary fallback when Binance futures is unreachable. [PROBED] OK
+// Bybit linear tickers carry mark/index, funding and OI notional in one call.
+// OI history and the retail long/short ratio are per-symbol REST calls.
 
-export async function bybitSnapshot(symbols: string[]): Promise<Map<string, { funding8h: number; oiUsd: number }>> {
-  return cached('deriv:bybit', RATE.BYBIT_MIN_INTERVAL_MS, async () => {
-    const m = new Map<string, { funding8h: number; oiUsd: number }>();
-    const res = await fetchJson<{
-      result: { list: { symbol: string; fundingRate: string; openInterest: string; openInterestValue: string; nextFundingTime: string }[] };
-    }>(`${NETWORK.BYBIT_HOST}/v5/market/tickers?category=linear`, {
-      label: 'bybit tickers',
-      retries: 1,
-      timeoutMs: 20_000,
-    }).catch(() => null);
-    if (!res?.result?.list) return m;
-    // Bybit funding is per 8h on linear perps.
-    for (const t of res.result.list) {
-      m.set(t.symbol, {
-        funding8h: Number(t.fundingRate) || 0,
+interface BybitTicker {
+  symbol: string;
+  markPrice: string;
+  indexPrice: string;
+  fundingRate: string;
+  fundingIntervalHour?: string;
+  nextFundingTime: string;
+  openInterest: string;
+  openInterestValue: string;
+}
+
+interface BybitTickersResponse {
+  retCode: number;
+  result?: { list: BybitTicker[] };
+}
+
+const BYBIT_PERIOD: Record<'5m' | '15m' | '1h' | '4h' | '1d', string> = {
+  '5m': '5min',
+  '15m': '15min',
+  '1h': '1h',
+  '4h': '4h',
+  '1d': '1d',
+};
+
+async function bybitTickers(): Promise<BybitTicker[]> {
+  return cached('deriv:bybit:tickers', RATE.BYBIT_MIN_INTERVAL_MS, async () => {
+    const res = await fetchJson<BybitTickersResponse>(
+      `${NETWORK.BYBIT_HOST}/v5/market/tickers?category=linear`,
+      { label: 'bybit tickers', retries: 1, timeoutMs: 20_000 },
+    );
+    if (res.retCode !== 0) throw new Error(`bybit tickers -> retCode ${res.retCode}`);
+    return res.result?.list ?? [];
+  });
+}
+
+function bybitFunding8h(t: BybitTicker): number {
+  const rate = Number(t.fundingRate);
+  const intervalH = Number(t.fundingIntervalHour) || 8;
+  return Number.isFinite(rate) && intervalH > 0 ? rate * (8 / intervalH) : 0;
+}
+
+function bybitAlias(requested: string, bySymbol: Map<string, BybitTicker>): BybitTicker | null {
+  const base = requested.replace(/USDT$/, '');
+  for (const candidate of bybitSymbolCandidates(base)) {
+    const hit = bySymbol.get(candidate);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+export const bybitFutures: DerivativesProvider = {
+  name: 'bybit-linear',
+
+  async snapshot(symbols) {
+    const list = await bybitTickers().catch(() => [] as BybitTicker[]);
+    const bySymbol = new Map(list.map((t) => [t.symbol, t]));
+    const out: DerivRaw[] = [];
+
+    for (const requested of symbols) {
+      const t = bySymbol.get(requested) ?? bybitAlias(requested, bySymbol);
+      if (!t) continue;
+      const mark = Number(t.markPrice);
+      const index = Number(t.indexPrice);
+      const oi = Number(t.openInterest);
+      if (!Number.isFinite(mark) || mark <= 0 || !Number.isFinite(oi) || oi < 0) continue;
+      out.push({
+        symbol: requested,
+        venueSymbol: t.symbol,
+        markPrice: mark,
+        indexPrice: Number.isFinite(index) ? index : 0,
+        fundingRate: Number(t.fundingRate) || 0,
+        fundingIntervalH: Number(t.fundingIntervalHour) || 8,
+        nextFundingTime: Number(t.nextFundingTime) || 0,
+        openInterest: oi,
         oiUsd: Number(t.openInterestValue) || 0,
       });
     }
-    void symbols;
-    return m;
-  });
+    return out;
+  },
+
+  async oiHistory(symbol, period, limit) {
+    const body = await cached(
+      `deriv:bybit:oih:${symbol}:${period}:${limit}`,
+      REFRESH.OI_HISTORY_MS,
+      async () => {
+        const res = await fetchJson<{
+          retCode: number;
+          result?: { list: { openInterest: string; timestamp: string }[] };
+        }>(
+          `${NETWORK.BYBIT_HOST}/v5/market/open-interest?category=linear&symbol=${symbol}` +
+            `&intervalTime=${BYBIT_PERIOD[period]}&limit=${Math.min(200, Math.max(1, limit))}`,
+          { label: `bybit oiHist ${symbol}`, retries: 1, timeoutMs: 20_000 },
+        );
+        if (res.retCode !== 0) throw new Error(`bybit oiHist ${symbol} -> retCode ${res.retCode}`);
+        return res.result?.list ?? [];
+      },
+    );
+
+    const points: OiPoint[] = body
+      .map((r) => ({ t: Number(r.timestamp), oi: Number(r.openInterest), changePct: 0 }))
+      .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.oi))
+      .sort((a, b) => a.t - b.t);
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1].oi;
+      points[i].changePct = prev > 0 ? ((points[i].oi - prev) / prev) * 100 : 0;
+    }
+    return { symbol, points };
+  },
+
+  async longShort(symbol, period) {
+    const body = await cached(
+      `deriv:bybit:ls:${symbol}:${period}`,
+      REFRESH.LONG_SHORT_RATIO_MS,
+      async () => {
+        const res = await fetchJson<{
+          retCode: number;
+          result?: { list: { buyRatio: string; sellRatio: string; timestamp: string }[] };
+        }>(
+          `${NETWORK.BYBIT_HOST}/v5/market/account-ratio?category=linear&symbol=${symbol}` +
+            `&period=${BYBIT_PERIOD[period as keyof typeof BYBIT_PERIOD] ?? '5min'}&limit=30`,
+          { label: `bybit ls ${symbol}`, retries: 1, timeoutMs: 20_000 },
+        );
+        if (res.retCode !== 0) throw new Error(`bybit ls ${symbol} -> retCode ${res.retCode}`);
+        return res.result?.list ?? [];
+      },
+    ).catch(() => []);
+
+    const accountRatio: LsPoint[] = body
+      .map((r) => {
+        const buy = Number(r.buyRatio);
+        const sell = Number(r.sellRatio);
+        return { t: Number(r.timestamp), ratio: sell > 0 ? buy / sell : 0 };
+      })
+      .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.ratio) && p.ratio > 0)
+      .sort((a, b) => a.t - b.t);
+
+    return {
+      symbol,
+      accountRatio,
+      topPositionRatio: [],
+      takerRatio: [],
+    };
+  },
+};
+
+/**
+ * Cross-venue map used by `crossVenue()`. Keyed by both the requested spot
+ * symbol and the venue's actual symbol so 1000PEPEUSDT joins to PEPEUSDT.
+ */
+export async function bybitSnapshot(symbols: string[]): Promise<Map<string, { funding8h: number; oiUsd: number }>> {
+  const list = await bybitTickers().catch(() => [] as BybitTicker[]);
+  const bySymbol = new Map(list.map((t) => [t.symbol, t]));
+  const m = new Map<string, { funding8h: number; oiUsd: number }>();
+
+  for (const t of list) {
+    m.set(t.symbol, {
+      funding8h: bybitFunding8h(t),
+      oiUsd: Number(t.openInterestValue) || 0,
+    });
+  }
+  for (const requested of symbols) {
+    if (m.has(requested)) continue;
+    const t = bybitAlias(requested, bySymbol);
+    if (t) {
+      m.set(requested, {
+        funding8h: bybitFunding8h(t),
+        oiUsd: Number(t.openInterestValue) || 0,
+      });
+    }
+  }
+  return m;
 }
 
 // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

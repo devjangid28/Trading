@@ -1,63 +1,48 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLiveStream, type LiveStreamResult } from './useLiveStream';
-import { freshnessOf, ageLabel, type Freshness } from './freshness';
 import type { StreamMsg, ScanResult } from '../../shared/types';
+import { applyTick, markData } from './priceStore';
+import { applyAgg } from './aggStore';
 
 /**
  * Stage 1 — the app-level live stream.
  *
- * Owns one socket for the whole app (rather than one per panel) and exposes it
- * three ways:
+ * Owns one socket for the whole app (rather than one per panel) and exposes the
+ * low-frequency state:
  *
- *   - `scan`   the newest full board, replaced by `scan` push events
- *   - `prices` a live price overlay keyed by symbol, applied on top of the
- *              scan rows so prices move between candle closes
- *   - `freshness` the LIVE / DELAYED / STALE badge state
+ *   - `scan`   the newest full board, replaced by `scan` push events (~1/min)
+ *   - `state`  connecting / open / reconnecting / closed
+ *   - `blackedOut` the event-risk flag carried by the scan
  *
- * The price overlay is deliberately a Map rather than a re-render of the row
- * array. Rebuilding rows on every tick would re-sort and re-run every cell,
- * which is what makes tick-driven boards feel laggy and flicker. Instead the
- * overlay is applied at render time in the cell that needs it, so a price
- * change touches one text node.
+ * HIGH-FREQUENCY PRICES ARE NOT PUBLISHED HERE.
+ *
+ * An earlier version put a `prices` record in this context and rebuilt it on
+ * every tick. That gave the context a new identity every second, force-rendered
+ * every `useLive()` subscriber (the whole app shell included), and re-rendered
+ * every price cell for one symbol's tick. Prices now live in `priceStore`, an
+ * external store with per-symbol subscriptions, and this context only changes
+ * when the board itself changes — roughly once a minute.
  */
 
-export interface LivePrice {
-  price: number;
-  changePct: number;
-  /** 'up' or 'down' relative to the previous streamed price, for the flash. */
-  dir: 'up' | 'down' | 'flat';
-  at: number;
-}
+export type { LivePrice } from './priceStore';
+export { useLivePrice, livePrice } from './priceStore';
 
 export interface LiveContextValue {
   scan: ScanResult | null;
-  prices: Record<string, LivePrice>;
-  getPrice: (symbol: string) => LivePrice | null;
-  freshness: Freshness;
-  freshnessLabel: string;
   state: LiveStreamResult<StreamMsg>['state'];
-  lastDataAt: number | null;
   blackedOut: boolean;
-  /** True once the socket has produced data; used to decide polling fallback. */
-  isLive: boolean;
 }
 
 const EMPTY: LiveContextValue = {
   scan: null,
-  prices: {},
-  getPrice: () => null,
-  freshness: 'UNKNOWN',
-  freshnessLabel: 'no data',
   state: 'connecting',
-  lastDataAt: null,
   blackedOut: false,
-  isLive: false,
 };
 
 let current: LiveContextValue = EMPTY;
 const listeners = new Set<() => void>();
 
-function publish(next: LiveContextValue) {
+function publish(next: LiveContextValue): void {
   current = next;
   for (const l of listeners) l();
 }
@@ -80,27 +65,22 @@ export function useLive(): LiveContextValue {
 /**
  * Mount once, high in the tree. Opens the socket and keeps the derived state
  * published to all consumers.
+ *
+ * `visibleSymbols` narrows the SSE subscription to the symbols the app actually
+ * renders: the server then pushes ticks for only those (see
+ * POST /api/stream/visible). Pass `null` to keep the legacy all-symbols feed.
  */
-export function useLiveStreamProvider(fallbackScan: ScanResult | null): void {
+export function useLiveStreamProvider(
+  fallbackScan: ScanResult | null,
+  visibleSymbols?: string[] | null,
+): void {
   const [scan, setScan] = useState<ScanResult | null>(fallbackScan);
-  const [prices, setPrices] = useState<Record<string, LivePrice>>({});
   const [blackedOut, setBlackedOut] = useState(false);
 
-  // Previous prices drive the flash direction. Kept in a ref so the tick
-  // handler does not need the previous state object.
-  const prev = useRef<Record<string, number>>({});
-
+  // Ticks go straight into the external store, never through React state, so
+  // the provider does not re-render per tick.
   const onTick = useCallback((msg: Extract<StreamMsg, { type: 'tick' }>) => {
-    const sym = msg.symbol;
-    const was = prev.current[sym];
-    prev.current[sym] = msg.price;
-    const entry: LivePrice = {
-      price: msg.price,
-      changePct: msg.changePct,
-      dir: was === undefined || was === msg.price ? 'flat' : msg.price > was ? 'up' : 'down',
-      at: msg.ts,
-    };
-    setPrices((p) => (p[sym]?.price === msg.price && p[sym]?.dir === entry.dir ? p : { ...p, [sym]: entry }));
+    applyTick(msg.symbol, msg.price, msg.changePct, msg.ts);
   }, []);
 
   const stream = useLiveStream({
@@ -113,21 +93,21 @@ export function useLiveStreamProvider(fallbackScan: ScanResult | null): void {
       setBlackedOut(m.scan.blackedOut);
     },
     onTick,
+    // The 1s aggregate goes into its own external store, so the app shell does
+    // not re-render once per second with it.
+    onAgg: (m) => applyAgg(m.agg),
+    // Freshness clock: the exact receive time of the newest data message, fed
+    // to the store so the badge ages correctly without a render per tick.
+    onData: markData,
+    visibleSymbols,
   });
 
-  const { state, lastDataAgeMs, lastDataAt } = stream;
+  const { state } = stream;
 
-  const value = useMemo<LiveContextValue>(() => ({
-    scan,
-    prices,
-    getPrice: (symbol: string) => prices[symbol] ?? null,
-    freshness: freshnessOf(lastDataAgeMs),
-    freshnessLabel: ageLabel(lastDataAgeMs),
-    state,
-    lastDataAt,
-    blackedOut,
-    isLive: lastDataAt !== null,
-  }), [scan, prices, state, lastDataAgeMs, lastDataAt, blackedOut]);
+  const value = useMemo<LiveContextValue>(
+    () => ({ scan, state, blackedOut }),
+    [scan, state, blackedOut],
+  );
 
   // Publish on every change; subscribers re-read via useLive().
   useEffect(() => { publish(value); }, [value]);

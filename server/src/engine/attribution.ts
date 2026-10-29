@@ -53,12 +53,24 @@ export function attribute(
   news: NewsItem[],
   opts: AttributionOptions,
 ): Attribution | null {
+  /**
+   * Closed candles only, enforced here rather than at the caller.
+   *
+   * Every other consumer of this repo filters `c.closed` at its own boundary
+   * (`orderblock.ts`, `timeframes.ts`, `conviction.ts`, `worker.ts`,
+   * `backfill.ts`). This function did not, and both call sites pass the raw
+   * `fetchKlines` array — so the still-forming 5m bar was inside `lastPrice`,
+   * `basePrice`, `rawReturnPct`, `moveZ` and `volZ`. A partially-formed bar is
+   * not a price the market reached; a move measured against one is not a move
+   * that happened, and the 2.5-sigma gate then judges fiction.
+   */
+  const closed = candles.filter((c) => c.closed);
   const periods = Math.max(1, Math.round(opts.horizonMinutes / 5));
-  if (candles.length < periods + 25) return null;
+  if (closed.length < periods + 25) return null;
 
-  const closes = candles.map((c) => c.c);
+  const closes = closed.map((c) => c.c);
   const lastPrice = closes[closes.length - 1];
-  const at = candles.length - 1 - periods;
+  const at = closed.length - 1 - periods;
   if (at < 1) return null;
 
   const basePrice = closes[at];
@@ -72,14 +84,14 @@ export function attribute(
   const abnormalReturnPct = rawReturnPct - expectedReturnPct;
 
   // Z-scores against the asset's own recent history of this-horizon moves.
-  const histReturns = logReturns(candles.slice(0, at + 1), periods).map((r) => r * 100);
+  const histReturns = logReturns(closed.slice(0, at + 1), periods).map((r) => r * 100);
   const sd = stdev(histReturns) || 1;
   const moveZ = abnormalReturnPct / sd;
 
-  const histVolumes = logVolumes(candles.slice(0, at + 1), periods);
+  const histVolumes = logVolumes(closed.slice(0, at + 1), periods);
   const vMean = mean(histVolumes);
   const vSd = stdev(histVolumes) || 1;
-  const curVol = candles.slice(at + 1).reduce((a, c) => a + c.v, 0);
+  const curVol = closed.slice(at + 1).reduce((a, c) => a + c.v, 0);
   const volZ = curVol > 0 ? (Math.log(curVol) - vMean) / vSd : 0;
 
   const significant = (Math.abs(moveZ) >= 2.5 && volZ >= 2) || Math.abs(moveZ) >= 3.5;
@@ -147,8 +159,8 @@ export function attribute(
     symbol,
     name,
     price: lastPrice,
-    priceChangePct: Math.round((candles.length > 1
-      ? ((lastPrice - candles[candles.length - 2].c) / candles[candles.length - 2].c) * 100
+    priceChangePct: Math.round((closed.length > 1
+      ? ((lastPrice - closed[closed.length - 2].c) / closed[closed.length - 2].c) * 100
       : 0) * 100) / 100,
     rawReturnPct: Math.round(rawReturnPct * 100) / 100,
     expectedReturnPct: Math.round(expectedReturnPct * 100) / 100,
@@ -164,6 +176,15 @@ export function attribute(
       .sort((a, b) => Math.abs(b.directionScore) - Math.abs(a.directionScore))
       .slice(0, 6),
     windowMinutes: opts.horizonMinutes,
+    asOf: now,
+    meta: {
+      asOf: now,
+      source: 'binance-klines',
+      stale: false,
+      derivation:
+        'abnormal return vs BTC beta, gated on the asset\'s own return history; ' +
+        'closed candles only; the 0.35 explained-return scale is hand-tuned and uncalibrated',
+    },
   };
 }
 

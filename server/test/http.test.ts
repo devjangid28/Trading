@@ -39,9 +39,13 @@ describe('isRateLimitedStatus', () => {
 
 describe('coolOffMs', () => {
   it('is deterministic with zero jitter, so tests can assert it', () => {
-    expect(coolOffMs(1, 0)).toBe(5_000);
-    expect(coolOffMs(2, 0)).toBe(20_000);
-    expect(coolOffMs(3, 0)).toBe(60_000);
+    // The old ladder was 5s / 20s / 60s. That is what let a self-inflicted 429
+    // escalate into a 418, so it was replaced by the ladder Binance documents:
+    // "IP bans are tracked and scale in duration for repeat offenders, from 2
+    // minutes to 3 days."
+    expect(coolOffMs(1, 0)).toBe(120_000);
+    expect(coolOffMs(2, 0)).toBe(300_000);
+    expect(coolOffMs(3, 0)).toBe(900_000);
   });
 
   it('escalates monotonically with repeated offences', () => {
@@ -52,20 +56,20 @@ describe('coolOffMs', () => {
     expect(c).toBeGreaterThan(b);
   });
 
-  it('caps at the maximum for many offences rather than growing without limit', () => {
-    expect(coolOffMs(50, 0)).toBe(60_000);
+  it('caps at the documented 3-day maximum rather than growing without limit', () => {
+    expect(coolOffMs(50, 0)).toBe(72 * 3600_000);
   });
 
   it('treats a nonsensical strike count as a first offence', () => {
-    expect(coolOffMs(0, 0)).toBe(5_000);
-    expect(coolOffMs(-1, 0)).toBe(5_000);
+    expect(coolOffMs(0, 0)).toBe(120_000);
+    expect(coolOffMs(-1, 0)).toBe(120_000);
   });
 
   it('keeps jitter inside the requested window', () => {
     for (let i = 0; i < 200; i++) {
       const v = coolOffMs(1, 1_500);
-      expect(v).toBeGreaterThanOrEqual(5_000);
-      expect(v).toBeLessThan(6_500);
+      expect(v).toBeGreaterThanOrEqual(120_000);
+      expect(v).toBeLessThan(121_500);
     }
   });
 });

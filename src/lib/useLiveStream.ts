@@ -2,82 +2,108 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StreamMsg } from '../../shared/types';
 import { LIVE } from './freshness';
 
-/**
- * Stage 1 — the SSE client.
- *
- * `usePolling` stays as the fallback: if the socket cannot be established at
- * all, the app must still show data rather than a dead screen. The hook
- * therefore reports its own state instead of throwing, and the consumer
- * decides whether to fall back.
- *
- * The important behaviours:
- *
- * - Auto-reconnect with backoff. A closed laptop lid or a proxy restart should
- *   recover on its own; the caller does not remount anything.
- * - `lastEventAt` drives the LIVE / DELAYED / STALE badge. This is the only
- *   honest signal that the data is current: a socket can be "open" while the
- *   upstream feed has silently gone quiet, and an open socket alone would show
- *   a reassuring green badge over stale prices.
- * - Reconnect asks the server for a fresh snapshot via `Last-Event-ID`
- *   semantics, so a gap in ticks is corrected rather than left as a hole.
- * - Heartbeats alone do NOT reset `lastDataAt`. A heartbeat proves the
- *   connection is alive, not that market data is flowing; counting it as
- *   fresh would keep a board looking live while every price is frozen.
- */
-
 export type StreamState = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
 export interface LiveStreamOptions<T> {
-  /** Reduce a raw message into the shape the UI wants, or null to ignore it. */
   select?: (msg: StreamMsg) => T | null;
   onSnapshot?: (msg: Extract<StreamMsg, { type: 'snapshot' }>) => void;
   onScan?: (msg: Extract<StreamMsg, { type: 'scan' }>) => void;
+  onAgg?: (msg: Extract<StreamMsg, { type: 'agg' }>) => void;
   onTick?: (msg: Extract<StreamMsg, { type: 'tick' }>) => void;
   onLiq?: (msg: Extract<StreamMsg, { type: 'liq' }>) => void;
   onStatus?: (msg: Extract<StreamMsg, { type: 'status' }>) => void;
   onAlert?: (msg: Extract<StreamMsg, { type: 'alert' }>) => void;
+  onData?: (at: number) => void;
+  visibleSymbols?: string[] | null;
   enabled?: boolean;
 }
 
 export interface LiveStreamResult<T> {
   state: StreamState;
-  /** ms since the last message that carried real data. */
-  lastDataAgeMs: number | null;
-  /** Epoch ms of the last data-bearing event. */
-  lastDataAt: number | null;
-  /** Epoch ms of the last heartbeat, proving the socket itself is alive. */
-  lastEventAt: number | null;
   attempts: number;
   error: string | null;
   value: T | null;
 }
 
-const BASE_BACKOFF_MS = 1_000;
-const MAX_BACKOFF_MS = 30_000;
+// ── Reconnect tuning ────────────────────────────────────────────────────────
+// Was 1s base / 30s max. 30s max meant a tab backgrounded for 30s would sit
+// stale for another 30s after coming back. Now 500ms base / 8s max — fast
+// enough to recover in one or two cycles, slow enough not to hammer the server.
+const BASE_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 8_000;
+
+// If no DATA message (tick, scan, snapshot, agg — NOT heartbeat) arrives within
+// this window the upstream Binance feed is silently dead even though the SSE
+// pipe is open. Tear down and reconnect.
+const DATA_WATCHDOG_MS = 12_000;
 
 export function useLiveStream<T = StreamMsg>(
   opts: LiveStreamOptions<T> = {},
 ): LiveStreamResult<T> {
   const {
-    onSnapshot, onScan, onTick, onLiq, onStatus, onAlert,
-    select, enabled = true,
+    onSnapshot, onScan, onTick, onLiq, onStatus, onAlert, onData, onAgg,
+    select, visibleSymbols, enabled = true,
   } = opts;
 
   const [state, setState] = useState<StreamState>('connecting');
   const [value, setValue] = useState<T | null>(null);
-  const [lastDataAt, setLastDataAt] = useState<number | null>(null);
-  const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const [attempts, setAttempts] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  // Callbacks live in a ref so that passing an inline arrow does not tear down
-  // and re-establish the socket on every parent render.
-  const cbs = useRef({ onSnapshot, onScan, onTick, onLiq, onStatus, onAlert, select });
-  cbs.current = { onSnapshot, onScan, onTick, onLiq, onStatus, onAlert, select };
+  const cbs = useRef({ onSnapshot, onScan, onTick, onLiq, onStatus, onAlert, onData, onAgg, select, visible: visibleSymbols });
+  cbs.current = { onSnapshot, onScan, onTick, onLiq, onStatus, onAlert, onData, onAgg, select, visible: visibleSymbols };
 
   const esRef = useRef<EventSource | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedByUs = useRef(false);
+
+  const cidRef = useRef<string | null>(null);
+  const visibleKeyRef = useRef('');
+
+  const ensureCid = (): string => {
+    if (!cidRef.current) {
+      cidRef.current =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID().replace(/-/g, '').slice(0, 20)
+          : `of-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+    return cidRef.current;
+  };
+
+  const postVisible = useCallback((force = false) => {
+    const cid = cidRef.current;
+    const list = cbs.current.visible;
+    if (!cid || !Array.isArray(list)) return;
+    const key = list.slice().sort().join(',');
+    if (!force && key === visibleKeyRef.current) return;
+    visibleKeyRef.current = key;
+    void fetch('/api/stream/visible', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cid, symbols: list }),
+    }).catch(() => {});
+  }, []);
+
+  const visibleKey = Array.isArray(visibleSymbols) ? visibleSymbols.slice().sort().join(',') : '';
+  useEffect(() => {
+    postVisible();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey, postVisible]);
+
+  // scheduleReconnect is defined after connect, but connect's closure needs it.
+  // Use a ref so connect can call it without a circular dep.
+  const scheduleReconnectRef = useRef<() => void>(() => {});
+
+  const armWatchdog = useCallback(() => {
+    if (watchdogRef.current) clearTimeout(watchdogRef.current);
+    watchdogRef.current = setTimeout(() => {
+      // Upstream feed silently dead — close and reconnect.
+      const es = esRef.current;
+      if (es) { es.close(); esRef.current = null; }
+      if (!closedByUs.current) scheduleReconnectRef.current();
+    }, DATA_WATCHDOG_MS);
+  }, []);
 
   const connect = useCallback(() => {
     if (!enabled) return;
@@ -85,10 +111,12 @@ export function useLiveStream<T = StreamMsg>(
 
     let es: EventSource;
     try {
-      es = new EventSource('/api/stream');
+      const wantsVisible = Array.isArray(cbs.current.visible);
+      const url = wantsVisible ? `/api/stream?cid=${encodeURIComponent(ensureCid())}` : '/api/stream';
+      es = new EventSource(url);
     } catch (e) {
       setError((e as Error).message);
-      scheduleReconnect();
+      scheduleReconnectRef.current();
       return;
     }
     esRef.current = es;
@@ -97,22 +125,23 @@ export function useLiveStream<T = StreamMsg>(
       setState('open');
       setError(null);
       setAttempts(0);
+      postVisible(true);
+      // Start the watchdog — if no data arrives within DATA_WATCHDOG_MS the
+      // feed is silently dead and we reconnect.
+      armWatchdog();
     };
 
     es.onerror = () => {
-      // EventSource retries on its own, but with no control over backoff and
-      // no way to reset the attempt counter, so we close it and drive the
-      // reconnect ourselves. `readyState === CLOSED` means it gave up.
-      setState((s) => (s === 'open' ? 'reconnecting' : 'reconnecting'));
+      setState('reconnecting');
+      if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
       if (es.readyState === EventSource.CLOSED) {
         es.close();
-        scheduleReconnect();
+        scheduleReconnectRef.current();
       }
     };
 
     es.onmessage = (ev) => {
       const now = Date.now();
-      setLastEventAt(now);
       let msg: StreamMsg;
       try {
         msg = JSON.parse(ev.data) as StreamMsg;
@@ -122,33 +151,39 @@ export function useLiveStream<T = StreamMsg>(
 
       switch (msg.type) {
         case 'snapshot': cbs.current.onSnapshot?.(msg); break;
-        case 'scan': cbs.current.onScan?.(msg); break;
-        case 'tick': cbs.current.onTick?.(msg); break;
-        case 'liq': cbs.current.onLiq?.(msg); break;
-        case 'status': cbs.current.onStatus?.(msg); break;
-        case 'alert': cbs.current.onAlert?.(msg); break;
+        case 'scan':     cbs.current.onScan?.(msg);     break;
+        case 'agg':      cbs.current.onAgg?.(msg);      break;
+        case 'tick':     cbs.current.onTick?.(msg);     break;
+        case 'liq':      cbs.current.onLiq?.(msg);      break;
+        case 'status':   cbs.current.onStatus?.(msg);   break;
+        case 'alert':    cbs.current.onAlert?.(msg);    break;
         case 'heartbeat':
-          // Deliberately does NOT touch lastDataAt. See the note above.
+          // Heartbeat proves the SSE pipe is open but NOT that Binance is
+          // pushing ticks. Reset the watchdog so we don't reconnect during a
+          // genuinely quiet market, but do NOT call onData — that would show
+          // LIVE on a frozen price feed.
+          armWatchdog();
           return;
         default:
           break;
       }
 
-      setLastDataAt(now);
+      // Real data: reset watchdog and mark freshness.
+      armWatchdog();
+      cbs.current.onData?.(now);
+
       const picked = cbs.current.select?.(msg) ?? null;
       if (picked !== null && picked !== undefined) setValue(picked);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [enabled, armWatchdog, postVisible]);
 
   const scheduleReconnect = useCallback(() => {
     if (closedByUs.current) return;
     if (timerRef.current) return;
     setAttempts((a) => {
       const next = a + 1;
-      // Exponential backoff, capped. Deterministic rather than jittered
-      // because a single client reconnects, not a fleet.
-      const wait = Math.min(BASE_BACKOFF_MS * 2 ** Math.min(next, 5), MAX_BACKOFF_MS);
+      const wait = Math.min(BASE_BACKOFF_MS * 2 ** Math.min(next, 4), MAX_BACKOFF_MS);
       timerRef.current = setTimeout(() => {
         timerRef.current = null;
         connect();
@@ -157,6 +192,9 @@ export function useLiveStream<T = StreamMsg>(
     });
   }, [connect]);
 
+  // Keep the ref in sync so connect's closure can call it.
+  useEffect(() => { scheduleReconnectRef.current = scheduleReconnect; }, [scheduleReconnect]);
+
   useEffect(() => {
     if (!enabled) {
       setState('closed');
@@ -164,36 +202,42 @@ export function useLiveStream<T = StreamMsg>(
     }
     closedByUs.current = false;
     connect();
+
+    // Reconnect immediately when the tab becomes visible again.
+    // A backgrounded tab has a dead SSE connection; without this the user
+    // sees stale data for up to MAX_BACKOFF_MS after switching back.
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      const es = esRef.current;
+      if (!es || es.readyState === EventSource.CLOSED) {
+        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+        connect();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // Also reconnect on network coming back online.
+    const onOnline = () => {
+      const es = esRef.current;
+      if (!es || es.readyState === EventSource.CLOSED) {
+        if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+        connect();
+      }
+    };
+    window.addEventListener('online', onOnline);
+
     return () => {
       closedByUs.current = true;
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+      if (watchdogRef.current) { clearTimeout(watchdogRef.current); watchdogRef.current = null; }
       esRef.current?.close();
       esRef.current = null;
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
     };
   }, [enabled, connect]);
 
-  // Tick the age so the badge transitions on its own without a re-render
-  // storm from the stream itself.
-  const [, force] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => force((n) => n + 1), 2_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const lastDataAgeMs = lastDataAt === null ? null : Date.now() - lastDataAt;
-
-  return {
-    state,
-    value,
-    lastDataAt,
-    lastEventAt,
-    lastDataAgeMs,
-    attempts,
-    error,
-  };
+  return { state, value, attempts, error };
 }
 
 export { LIVE };

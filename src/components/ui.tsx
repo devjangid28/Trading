@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { freshnessOf, ageLabel } from '../lib/freshness';
+import { freshnessOf, ageLabel, useAgeClock } from '../lib/freshness';
+import { useLastDataAt } from '../lib/priceStore';
 
 export function Panel({
   title,
@@ -71,48 +72,156 @@ export function LiveBadge({ updatedAt, stale }: { updatedAt: number; stale?: boo
 }
 
 /**
- * Per-panel freshness badge.
+ * Stream health notice — silent when healthy.
  *
- * Driven by the age of the newest DATA message, not by the age of the last
- * heartbeat. A heartbeat only proves the socket is open; the upstream feed can
- * be silently dead while heartbeats keep flowing, and a badge that counts them
- * would show a reassuring green over frozen prices.
+ * WHY IT RENDERS NOTHING WHEN LIVE
  *
- * UNKNOWN is rendered distinctly from LIVE for the same reason: no data yet is
- * not the same claim as fresh data.
+ * This replaced a permanent `LIVE` badge in the header plus a `STALE 10s ago`
+ * tag on every board row. A trading terminal does not do that: when the feed is
+ * healthy it just renders the price, and the only time it speaks about the
+ * feed is when the feed is wrong. A badge that says "LIVE" 99.9% of the time
+ * trains the eye to skip it, which means it has no value on the 0.1% — the one
+ * occasion it exists for.
+ *
+ * So the notice is silent by default and appears only past the DELAYED
+ * threshold, naming the age and the reason. That still satisfies the rule that
+ * stale data is never presented as live: silence is a claim about a feed we are
+ * actively receiving at 5Hz, not a badge we forgot to turn off. If the stream
+ * stops, this renders — it is the only thing standing between a frozen price
+ * and an unsuspecting trader.
+ *
+ * Driven by the age of the newest DATA message, not by the heartbeat. A
+ * heartbeat only proves the socket is open; the upstream feed can be silently
+ * dead while heartbeats keep flowing.
  */
-export function FreshnessBadge({
+export function StreamNotice({
   ageMs,
   className,
 }: {
-  ageMs: number | null;
+  /** Explicit age if the caller knows it; otherwise the app-wide data clock. */
+  ageMs?: number | null;
   className?: string;
 }) {
-  const [, setTick] = useState(0);
-  useInterval(() => setTick((x) => x + 1), 1000);
+  const now = useAgeClock();
+  const lastData = useLastDataAt();
 
-  const f = freshnessOf(ageMs);
-  const color =
-    f === 'LIVE' ? 'var(--color-up)'
-      : f === 'DELAYED' ? 'var(--color-amber)'
-        : 'var(--color-down)';
+  const resolvedAge = ageMs !== undefined
+    ? ageMs
+    : lastData === null
+      ? null
+      : now - lastData;
+
+  const f = freshnessOf(resolvedAge);
+  // LIVE renders nothing at all. There is no dot, no word, no reserved space.
+  if (f === 'LIVE') return null;
+
+  const color = f === 'DELAYED' ? 'var(--color-amber)' : 'var(--color-down)';
+  const label =
+    f === 'UNKNOWN'
+      ? 'connecting — no data yet'
+      : f === 'DELAYED'
+        ? `feed delayed ${ageLabel(resolvedAge)}`
+        : `feed stale ${ageLabel(resolvedAge)} — prices are not updating`;
 
   return (
     <span
+      data-testid="stream-notice"
       className={`inline-flex items-center gap-1.5 text-[10px] font-semibold tracking-wide ${className ?? ''}`}
       style={{ color }}
-      title={`Data age: ${ageLabel(ageMs)}`}
+      title={`Newest market data is ${ageLabel(resolvedAge)} old`}
       role="status"
-      aria-live="off"
     >
       <span
-        className={f === 'LIVE' ? 'live-dot' : ''}
         style={{ width: 6, height: 6, borderRadius: 999, background: color, display: 'inline-block' }}
       />
-      {f}
-      {f !== 'LIVE' && (
-        <span style={{ opacity: 0.7, fontWeight: 400 }}>({ageLabel(ageMs)})</span>
-      )}
+      {label}
+    </span>
+  );
+}
+
+/**
+ * The market source mode, shown persistently in the app header.
+ *
+ * This is a different claim from `StreamNotice`: freshness says how old THIS
+ * panel's data is; the mode badge says where the data is coming from at all.
+ * `MOCK` (fixture replay), `BANNED` (the upstream host was rate-limited or
+ * banned us), and `OFFLINE` (no socket) each need to be visible
+ * without hovering a tooltip — the old pill claimed "LIVE 24/7" over all of
+ * them, which is the exact dishonesty this badge exists to remove.
+ */
+export type MarketMode = 'LIVE' | 'MOCK' | 'BANNED' | 'OFFLINE';
+
+const MODE_PALETTE: Record<MarketMode, { color: string; label: string }> = {
+  LIVE: { color: 'var(--color-up)', label: 'LIVE' },
+  MOCK: { color: 'var(--color-amber)', label: 'MOCK' },
+  BANNED: { color: 'var(--color-down)', label: 'BANNED' },
+  OFFLINE: { color: 'var(--faint)', label: 'OFFLINE' },
+};
+
+export function ModeBadge({
+  mode,
+  detail,
+  className,
+}: {
+  mode: MarketMode;
+  detail?: string;
+  className?: string;
+}) {
+  const p = MODE_PALETTE[mode];
+  return (
+    <span
+      data-testid="mode-badge"
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold tracking-widest ${className ?? ''}`}
+      style={{
+        color: p.color,
+        borderColor: `color-mix(in srgb, ${p.color} 45%, transparent)`,
+        background: `color-mix(in srgb, ${p.color} 8%, transparent)`,
+      }}
+      title={detail}
+      role="status"
+    >
+      <span
+        style={{ width: 6, height: 6, borderRadius: 999, background: p.color, display: 'inline-block' }}
+      />
+      {p.label}
+    </span>
+  );
+}
+
+/**
+ * Per-value age tag.
+ *
+ * Kept for panels that render one number whose provenance matters on its own
+ * (a single quote, a funding rate, a position mark) — where saying how old the
+ * number is adds information rather than clutter.
+ *
+ * NOT used on the board rows. A per-row age tag on a 200-row board is the
+ * "STALE 10s ago" wall of text this UI used to have: it fires on whichever
+ * symbol happens to be quiet, says nothing actionable, and buries the price it
+ * sits next to. `StreamNotice` covers the case that actually matters — the feed
+ * as a whole — in one place.
+ */
+export function ValueAge({
+  at,
+  className,
+}: {
+  /** Epoch ms the displayed value was produced, or null when never seen. */
+  at: number | null | undefined;
+  className?: string;
+}) {
+  const now = useAgeClock();
+  const age = at === null || at === undefined ? null : Math.max(0, now - at);
+  const f = freshnessOf(age);
+  if (f === 'LIVE') return null;
+  const color = f === 'DELAYED' ? 'var(--color-amber)' : 'var(--color-down)';
+  return (
+    <span
+      data-testid="row-age"
+      className={`font-semibold tracking-wide ${className ?? ''}`}
+      style={{ color }}
+      title={at == null ? 'No value received yet' : `Value produced ${new Date(at).toISOString()}`}
+    >
+      {f === 'UNKNOWN' ? 'NO DATA' : `${f} ${ageLabel(age)}`}
     </span>
   );
 }

@@ -13,10 +13,16 @@ const MINOR = '−'; // U+2212, not a hyphen. A hyphen reads as a dash at small 
  *
  * Uses the proper minus sign and a thin space, because the axis is read at
  * 10px where an ASCII hyphen is genuinely hard to distinguish from a tick mark.
+ *
+ * The digits are formatted from the magnitude, not from the signed value.
+ * `toFixed` on a negative number emits its own ASCII hyphen, so formatting the
+ * signed value and prefixing U+2212 renders "−-3.2%" — a double minus that
+ * shipped here and was caught by `server/test/chartMath.test.ts`.
  */
 export function axisPct(pct: number, suffix = '%'): string {
   if (!Number.isFinite(pct)) return '—';
-  const v = Math.abs(pct) >= 100 ? pct.toFixed(0) : pct.toFixed(Math.abs(pct) >= 10 ? 0 : 1);
+  const abs = Math.abs(pct);
+  const v = abs >= 100 ? abs.toFixed(0) : abs.toFixed(abs >= 10 ? 0 : 1);
   const sign = pct > 0 ? '+' : pct < 0 ? MINOR : '';
   return `${sign}${v}${suffix}`;
 }

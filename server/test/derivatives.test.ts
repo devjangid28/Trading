@@ -13,7 +13,9 @@ import {
   oiChanges,
   lsDivergence,
   clamp,
+  crossVenue,
 } from '../src/engine/derivatives.js';
+import { bybitSymbolCandidates } from '../src/data/derivatives/providers.js';
 import { cvd, cvdDivergence } from '../src/live/marketState.js';
 import { DERIVATIVES } from '../src/config.js';
 
@@ -99,8 +101,17 @@ describe('fundingLabel', () => {
 });
 
 describe('fundingZScore', () => {
-  it('returns zero without enough history', () => {
-    expect(fundingZScore(0.001, [0.0001, 0.0002])).toBe(0);
+  it('returns null without enough history, never a fabricated zero', () => {
+    // M1.4: a zero here renders as "z=0.00", which reads as "the current rate
+    // is exactly at the mean". It is not that — it is that no z-score exists.
+    expect(fundingZScore(0.001, [0.0001, 0.0002])).toBeNull();
+  });
+
+  it('returns null when the history has no variance', () => {
+    // A constant history has zero standard deviation, so the z-score is
+    // undefined. Dividing by it is not a measurement either.
+    const flat = Array.from({ length: 30 }, () => 0.0005);
+    expect(fundingZScore(0.001, flat)).toBeNull();
   });
 
   it('is positive when the current rate is above its own history', () => {
@@ -353,5 +364,44 @@ describe('clamp', () => {
     expect(clamp(5, 0, 1)).toBe(1);
     expect(clamp(-5, 0, 1)).toBe(0);
     expect(clamp(0.5, 0, 1)).toBe(0.5);
+  });
+});
+
+describe('bybitSymbolCandidates', () => {
+  it('places the 1000x multiplier where Bybit actually puts it', () => {
+    expect(bybitSymbolCandidates('PEPE')).toContain('1000PEPEUSDT');
+    expect(bybitSymbolCandidates('SHIB')).toContain('SHIB1000USDT');
+  });
+
+  it('still tries the direct symbol first', () => {
+    expect(bybitSymbolCandidates('BTC')[0]).toBe('BTCUSDT');
+  });
+});
+
+describe('crossVenue', () => {
+  it('names Bybit as the primary when Bybit supplied the row', () => {
+    const cv = crossVenue(
+      'SOLUSDT',
+      0.0001,
+      599_587_374,
+      [{ symbol: 'SOLUSDT', markPrice: 101, funding8h: 0.0001, openInterest: 5_000_000, volume24h: 0 }],
+      new Map(),
+      'bybit-linear',
+    );
+    expect(cv!.venues[0]).toMatchObject({ name: 'bybit', funding8h: 0.0001, available: true });
+    expect(cv!.venues.filter((v) => v.name === 'bybit')).toHaveLength(1);
+  });
+
+  it('keeps Binance as the primary on the normal path and adds Bybit', () => {
+    const cv = crossVenue(
+      'SOLUSDT',
+      0.0002,
+      10,
+      null,
+      new Map([['SOLUSDT', { funding8h: 0.0001, oiUsd: 20 }]]),
+      'binance-futures',
+    );
+    expect(cv!.venues.map((v) => v.name)).toEqual(['binance', 'hyperliquid', 'bybit']);
+    expect(cv!.venues[2]).toMatchObject({ funding8h: 0.0001, oiUsd: 20, available: true });
   });
 });
