@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { apiUrl } from '../lib/api';
 import type { MindHealthView, MindRegime, MindSignalRow } from '../lib/api';
 
 /** Regime → label and colour. Adjectives, never conclusions. */
@@ -350,7 +351,7 @@ export function useMindHealth(intervalMs = 60_000): MindHealthView | null {
     let timer: ReturnType<typeof setInterval> | null = null;
     const load = async () => {
       try {
-        const res = await fetch('/api/mind/health');
+        const res = await fetch(apiUrl('/mind/health'));
         if (!res.ok) return;
         const body = (await res.json()) as MindHealthView;
         if (live) setHealth(body);

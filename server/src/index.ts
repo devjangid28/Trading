@@ -307,6 +307,26 @@ const app = express();
 app.use(compression());
 app.use(express.json());
 
+// Cross-origin support for split deployments (frontend on Vercel, engine
+// elsewhere). Only the exact origin named in ALLOWED_ORIGIN is accepted;
+// when it is unset the API stays same-origin only, which is the local default.
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN?.trim() ?? '';
+if (ALLOWED_ORIGIN) {
+  app.use((req, res, next) => {
+    if (req.headers.origin === ALLOWED_ORIGIN) {
+      res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  });
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 app.get('/api/derivatives', async (_req, res) => {

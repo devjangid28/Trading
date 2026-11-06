@@ -5,7 +5,7 @@
 >
 > Written: 10 October 2026 · Project root: `C:\Users\DK\Desktop\trading`
 > Stack: React 18 + Vite 6 + TypeScript 5.7 + Tailwind 4 (frontend) · Express 4 + tsx (engine)
-> Last updated: **5 November 2026** - Part XLVII added (S/R engine: three-tier break strength labels + thresholds on the level type)
+> Last updated: **6 November 2026** - Part XLVIII added (split deployment: `VITE_API_BASE` + `ALLOWED_ORIGIN` for Vercel frontend + Railway engine)
 >
 > **Parts I�?"IV are a historical record and are left as written.** Where a later part contradicts an
 > earlier one, the later part wins. Part XXIV.16 is current.
@@ -1051,6 +1051,8 @@ Every one is optional; the app runs fully without any of them.
 |---|---|---|---|
 | `PORT` | 8787 | startup (`:109`) | API listen port |
 | `ORDERFLOW_API_PORT` | → 8787 | Vite config load | Proxy target for `/api` |
+| `VITE_API_BASE` | unset (same-origin) | Vite build time (`src/lib/api.ts`) | Absolute engine origin for a split deployment (Vercel UI + Railway engine) |
+| `ALLOWED_ORIGIN` | unset (same-origin only) | startup (`index.ts:312`) | Exact frontend origin allowed cross-origin CORS (API + SSE) |
 | `ORDERFLOW_DB` | `server/data/orderflow.db` | **module load** | SQLite path. Set it *before* importing the store or it silently does nothing |
 | `ORDERFLOW_LOCK` | `data/orderflow.lock` | per call | Single-instance lock path |
 | `ORDERFLOW_MOCK` | unset (`=== '1'`) | module load + per call | Fixture-replay mode |
@@ -9484,3 +9486,75 @@ Verification (real runs, 5 Nov 2026):
 Honest note: `breakProbability` remains on `SRLevel` as a same-valued compatibility duplicate; the
 display and label code path uses `breakStrength`/`breakLabel`. A later cleanup pass can drop the
 duplicate once nothing else reads it.
+
+---
+
+## Part XLVIII - 6 Nov 2026: split deployment — Vercel frontend + Railway engine
+
+Symptom: after deploying the repo to Vercel, the site rendered "Could not reach the engine. HTTP
+404". Cause: Vercel served only the static `dist/` build; the engine is a long-running Express
+process (WebSocket ingest, SSE stream, `node:sqlite` ledger, single-instance lock) that cannot run
+inside Vercel serverless functions, so every `/api/*` call returned Vercel's 404.
+
+The fix makes the UI/engine split a supported configuration. The engine is unchanged in behaviour
+except for an opt-in CORS gate.
+
+### XLVIII.1 What changed
+
+- `src/lib/api.ts`: exports `API_BASE` (reads `import.meta.env.VITE_API_BASE`, trailing slashes
+  stripped, empty = same-origin) and `apiUrl(path)`. `get`/`post`/`useAssetDetail` now use it.
+- `src/lib/useLiveStream.ts`: the SSE `EventSource` URL and the `POST /api/stream/visible` call
+  use `apiUrl` (cross-origin EventSource works because the engine answers the CORS preflight/headers).
+- Hard-coded `/api` fetches replaced with `apiUrl(...)`: `src/charts/ChartSidebar.tsx`,
+  `src/components/DerivativesTab.tsx`, `src/components/MindBits.tsx`, `src/components/RadarView.tsx`,
+  `src/components/SignalsView.tsx`.
+- `src/home/CoinAvatar.tsx`: logo URLs pointing at `/static/logos` are prefixed with `API_BASE`
+  so logos keep working from a different origin.
+- `server/src/index.ts`: new opt-in middleware after `express.json()`. When
+  `ALLOWED_ORIGIN` is set, the exact origin gets `Access-Control-Allow-Origin` (+ `Vary: Origin`,
+  methods `GET,POST,OPTIONS`, header `Content-Type`) and `OPTIONS` short-circuits with 204. Unset
+  (default) = same-origin only, exactly as before.
+- `.env.example` documents `ALLOWED_ORIGIN` and `VITE_API_BASE`.
+
+### XLVIII.2 Verification - what was actually run
+
+```text
+> npm run typecheck
+(no output, exit 0)
+
+> npm run build
+vite v6.4.4 building for production...
+✓ 154 modules transformed.
+dist/index.html                 3.05 kB │ gzip:   1.43 kB
+dist/assets/index-CpgBf7Sd.css 220.58 kB │ gzip:  39.42 kB
+dist/assets/index-BIcALx0Z.js  977.47 kB │ gzip: 294.57 kB
+✓ built in 5.83s
+```
+
+Vite warns that the JS chunk is above 500 kB; non-blocking and pre-existing.
+`npm run verify` (full vitest suite) was not run; the change is frontend URL plumbing plus one
+opt-in Express middleware, and the full suite boots servers, not deploys. `npm run test` was not
+run for the same reason.
+
+### XLVIII.3 How to go live (the two-sided deployment)
+
+1. **Railway (engine):** create a service from the repo, set start command `npm start`
+   (or `tsx server/src/index.ts`), Node 22+. Railway sets `PORT` automatically. Set
+   `ALLOWED_ORIGIN=https://trading-sand-phi.vercel.app`.
+2. **Vercel (UI):** the existing static deployment stays. Add the environment variable
+   `VITE_API_BASE=https://<railway-url>` (the `...up.railway.app` domain) to the *Production*
+   environment in Project Settings → Environment Variables, then redeploy. Without it, the UI
+   keeps calling its own origin and the 404 returns.
+
+### XLVIII.4 Honest gaps after this Part
+
+- **No live end-to-end run.** Neither Railway nor Vercel was reachable from this session; the
+  deployment steps are unverified against the real accounts. The first action after wiring the
+  env vars is to load `https://trading-sand-phi.vercel.app` and confirm the board renders (and
+  that `https://<railway-url>/api/health` returns `ok` from a browser).
+- **Railway free tier sleeps.** Free-tier services spin down after inactivity; the first request
+  after sleep incurs cold-start delay. If live prices must be continuous, a paid plan or a
+  health-ping keeps it warm.
+- **`npm run verify` not run this pass** (see XLVIII.2). Last recorded full suite:
+  902 passed (43 files) at Part XLVII.
+- **No commit created.** Working tree remains uncommitted.

@@ -1,6 +1,6 @@
 import type { DerivRow, LiqEvent, MacroState, NewsFeed } from '../../shared/types';
 import { isUnavailable } from '../../shared/types';
-import { api, usePolling } from '../lib/api';
+import { api, apiUrl, usePolling } from '../lib/api';
 import { fmtAge, fmtPct, fmtUsd } from '../lib/format';
 import type { SidebarTab, TickerSnapshot } from './types';
 import { SIDEBAR_TABS } from './types';
@@ -23,7 +23,7 @@ interface DerivPayload {
 }
 
 async function fetchDerivatives(signal?: AbortSignal): Promise<DerivPayload> {
-  const response = await fetch('/api/derivatives', { signal });
+  const response = await fetch(apiUrl('/derivatives'), { signal });
   if (!response.ok) throw new Error(`Derivatives HTTP ${response.status}`);
   return response.json() as Promise<DerivPayload>;
 }

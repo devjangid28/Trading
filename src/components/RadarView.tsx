@@ -1,6 +1,6 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import type { DerivRow, Setup, TradePlan } from '../../shared/types';
-import { usePolling } from '../lib/api';
+import { apiUrl, usePolling } from '../lib/api';
 import { livePrice } from '../lib/liveContext';
 import { AssetPopup } from './AssetPopup';
 
@@ -315,7 +315,7 @@ export function RadarView() {
   const [chartFor, setChartFor] = useState<string | null>(null);
 
   const state = usePolling<RadarResponse>(
-    (s) => fetch('/api/radar', { signal: s }).then((r) => {
+    (s) => fetch(apiUrl('/radar'), { signal: s }).then((r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json() as Promise<RadarResponse>;
     }),

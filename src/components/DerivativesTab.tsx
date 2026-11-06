@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { DerivRow, LiqEvent } from '../../shared/types';
 import { isUnavailable } from '../../shared/types';
-import { usePolling } from '../lib/api';
+import { apiUrl, usePolling } from '../lib/api';
 import { fmtCompact, fmtPrice, fmtPct } from '../lib/format';
 import { Chip, Empty, Panel, Spinner, LiveBadge } from './ui';
 
@@ -72,11 +72,11 @@ function Cell({
 
 export function DerivativesTab({ onSelect }: { onSelect: (symbol: string) => void }) {
   const { data, error, loading, refresh: reload } = usePolling<DerivPayload>(
-    (s) => fetch('/api/derivatives', { signal: s }).then((r) => r.json()),
+    (s) => fetch(apiUrl('/derivatives'), { signal: s }).then((r) => r.json()),
     30_000,
   );
   const liq = usePolling<{ recent: LiqEvent[]; note: string; asOf: number }>(
-    (s) => fetch('/api/liquidations', { signal: s }).then((r) => r.json()),
+    (s) => fetch(apiUrl('/liquidations'), { signal: s }).then((r) => r.json()),
     15_000,
   );
   const [sort, setSort] = useState<SortKey>('funding');

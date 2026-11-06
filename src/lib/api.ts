@@ -1,6 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NextBlackout } from '../components/BlackoutCountdown';
 
+/**
+ * Base URL of the engine, i.e. the origin that serves everything under /api/*.
+ *
+ * Same-origin by default (the Vite dev proxy or, in production, the Express
+ * server itself). When the frontend and the engine are hosted separately — for
+ * example the UI on Vercel and the engine on Railway — build with
+ * `VITE_API_BASE=https://<engine-host>` and every fetch and EventSource in the
+ * app goes to that origin. Trailing slashes are tolerated.
+ */
+export const API_BASE =
+  ((import.meta.env.VITE_API_BASE as string | undefined) ?? '').replace(/\/+$/, '');
+
+export function apiUrl(path: string): string {
+  return `${API_BASE}/api${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 /** Shape returned by GET /api/calendar. */
 export interface CalendarResult {
   updatedAt: number;
@@ -87,7 +103,7 @@ export interface HealthState {
 }
 
 async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`/api${path}`, { signal });
+  const res = await fetch(apiUrl(path), { signal });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -108,7 +124,7 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
  * through here so the error handling is the same as the reads.
  */
 async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(apiUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -498,7 +514,7 @@ export function useLazy<T>(
 export function useAssetDetail(assetId: string | null): AsyncState<AssetDetail> {
   return useLazy<AssetDetail>(
     (signal) =>
-      fetch(`/api/asset/${assetId}`, { signal }).then((r) => {
+      fetch(apiUrl(`/asset/${assetId}`), { signal }).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       }),

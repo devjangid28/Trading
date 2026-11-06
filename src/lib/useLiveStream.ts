@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { StreamMsg } from '../../shared/types';
 import { LIVE } from './freshness';
+import { apiUrl } from './api';
 
 export type StreamState = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
@@ -78,7 +79,7 @@ export function useLiveStream<T = StreamMsg>(
     const key = list.slice().sort().join(',');
     if (!force && key === visibleKeyRef.current) return;
     visibleKeyRef.current = key;
-    void fetch('/api/stream/visible', {
+    void fetch(apiUrl('/stream/visible'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cid, symbols: list }),
@@ -112,7 +113,9 @@ export function useLiveStream<T = StreamMsg>(
     let es: EventSource;
     try {
       const wantsVisible = Array.isArray(cbs.current.visible);
-      const url = wantsVisible ? `/api/stream?cid=${encodeURIComponent(ensureCid())}` : '/api/stream';
+      const url = wantsVisible
+        ? `${apiUrl('/stream')}?cid=${encodeURIComponent(ensureCid())}`
+        : apiUrl('/stream');
       es = new EventSource(url);
     } catch (e) {
       setError((e as Error).message);

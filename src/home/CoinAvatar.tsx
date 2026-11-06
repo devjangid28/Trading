@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Side } from '../../shared/types';
 import { monogramColor, monogramFontSize, monogramFor } from '../../shared/identity';
+import { API_BASE } from '../lib/api';
 
 /**
  * The coin avatar: a real logo when we have one, a 4-letter monogram when we
@@ -33,6 +34,7 @@ export function CoinAvatar({
 }) {
   const [failed, setFailed] = useState(false);
   const text = monogramFor(ticker);
+  const src = logoUrl?.startsWith('/static/') && API_BASE ? `${API_BASE}${logoUrl}` : logoUrl;
   const accent =
     side === 'bearish' ? 'var(--color-down)' : side === 'bullish' ? 'var(--color-up)' : 'var(--border)';
   const showLogo = Boolean(logoUrl) && !failed;
@@ -52,7 +54,7 @@ export function CoinAvatar({
     >
       {showLogo ? (
         <img
-          src={logoUrl as string}
+          src={src as string}
           alt=""
           width={Math.round(size * 0.68)}
           height={Math.round(size * 0.68)}

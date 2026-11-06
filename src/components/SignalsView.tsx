@@ -1,6 +1,6 @@
 import { useMemo, useRef, useEffect, useState } from 'react';
 import type { Conviction, DerivRow, Setup, TradePlan } from '../../shared/types';
-import { api, usePolling } from '../lib/api';
+import { api, apiUrl, usePolling } from '../lib/api';
 import { livePrice } from '../lib/liveContext';
 import { AssetPopup } from './AssetPopup';
 import { MindSignalBlock } from './MindBits';
@@ -357,7 +357,7 @@ export function SignalsView() {
   const [chartFor, setChartFor] = useState<string | null>(null);
 
   const state = usePolling<SignalsResponse>(
-    (s) => fetch('/api/signals', { signal: s }).then((r) => {
+    (s) => fetch(apiUrl('/signals'), { signal: s }).then((r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json() as Promise<SignalsResponse>;
     }),
