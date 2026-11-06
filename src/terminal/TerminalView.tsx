@@ -5,12 +5,12 @@ import type {
 import { TERMINAL_INTERVALS } from '../../shared/types';
 import { api, usePolling } from '../lib/api';
 import type { MarketRow } from '../lib/api';
-import { fmtPrice, istClock } from '../lib/format';
+import { fmtPrice, fmtUsd, istClock } from '../lib/format';
 import { useLivePrice } from '../lib/priceStore';
 import { CandleChart } from '../components/CandleChart';
 import { Spinner, type MarketMode } from '../components/ui';
 import {
-  frameFromHistory, mergeBookFrames, mergeLiveCandle, mergeTrades,
+  INTERVAL_MS, frameFromHistory, mergeBookFrames, mergeLiveCandle, mergeTrades, tapeStats,
 } from './math';
 import { useTerminalBook } from './useTerminalBook';
 import { useTerminalCandles } from './useTerminalCandles';
@@ -21,11 +21,12 @@ import { buildMockHeatmap } from './mockHeatmap';
 import type { LayerToggles } from './HeatmapCanvas';
 import { HeatmapView } from './HeatmapView';
 import { DecisionRail } from './DecisionRail';
+import { FootprintView } from './footprint/FootprintView';
 import {
   FuturesView, GammaView, GuideView, L3EventsView, SentimentView, TapeView,
-  VolumeProfileView, WhalesView,
+  WhalesView,
 } from './TerminalViews';
-import { FootprintView } from './footprint/FootprintView';
+import { VolProfileView } from '../volprofile/VolProfileView';
 import './terminal.css';
 
 const DASH = '\u2014';
@@ -33,23 +34,31 @@ const MOCK_BTC_PRICE = 80_590;
 const MOCK_QUERY = typeof window !== 'undefined'
   && new URLSearchParams(window.location.search).get('mock') === '1';
 
-export type TerminalPage = 'charts' | 'heatmap' | 'footprint';
-type ViewKey =
-  | 'chart' | 'heatmap' | 'footprint' | 'whales' | 'volume-profile' | 'gamma'
-  | 'tape' | 'l3' | 'futures' | 'sentiment' | 'guide';
+export type TerminalPage =
+  | 'charts'
+  | 'heatmap'
+  | 'footprint'
+  | 'whales'
+  | 'volprofile'
+  | 'gamma'
+  | 'tape'
+  | 'l3'
+  | 'futures'
+  | 'sentiment'
+  | 'guide';
 
-const VIEWS: Array<{ key: ViewKey; label: string; hotkey: string | null }> = [
-  { key: 'chart', label: 'Chart', hotkey: '1' },
-  { key: 'heatmap', label: 'Heatmap', hotkey: '2' },
-  { key: 'footprint', label: 'Footprint', hotkey: '3' },
-  { key: 'whales', label: 'Whales', hotkey: '4' },
-  { key: 'volume-profile', label: 'Vol profile', hotkey: '5' },
-  { key: 'gamma', label: 'Gamma', hotkey: '6' },
-  { key: 'tape', label: 'Tape', hotkey: '7' },
-  { key: 'l3', label: 'L3 events', hotkey: '8' },
-  { key: 'futures', label: 'Futures', hotkey: '9' },
-  { key: 'sentiment', label: 'Sentiment', hotkey: '0' },
-  { key: 'guide', label: 'Guide', hotkey: null },
+const VIEW_TABS: Array<{ key: TerminalPage; label: string; title: string }> = [
+  { key: 'charts', label: 'Chart', title: 'Pro chart — indicators and drawing tools (key 1)' },
+  { key: 'heatmap', label: 'Heatmap', title: 'Liquidity heatmap (key 2)' },
+  { key: 'footprint', label: 'Footprint', title: 'Footprint (key 3)' },
+  { key: 'whales', label: 'Whales', title: 'Whale candles (key 4)' },
+  { key: 'volprofile', label: 'Vol profile', title: 'Volume profile (key 5)' },
+  { key: 'gamma', label: 'Gamma', title: 'Gamma levels — options walls, zero-gamma flip, max pain (key 6)' },
+  { key: 'tape', label: 'Tape', title: 'Time & sales (key 7)' },
+  { key: 'l3', label: 'L3 events', title: 'Liquidity events (L3-style) (key 8)' },
+  { key: 'futures', label: 'Futures', title: 'Futures — funding, open interest, liquidation map (key 9)' },
+  { key: 'sentiment', label: 'Sentiment', title: 'Sentiment — every reading as a meter, and their consensus (key 0)' },
+  { key: 'guide', label: 'Guide', title: 'How to read this terminal' },
 ];
 
 function TfButtons({
@@ -118,17 +127,17 @@ export function TerminalView({
   view: TerminalPage;
   onExit?: () => void;
 }) {
-  const [interval, setInterval] = useState<TerminalInterval>('15m');
+  const [interval, setInterval] = useState<TerminalInterval>('5m');
+  const [page, setPage] = useState<TerminalPage>(view);
+  useEffect(() => {
+    setPage(view);
+  }, [view]);
   const [picker, setPicker] = useState(false);
   const [query, setQuery] = useState('');
   const [chartH, setChartH] = useState(430);
   const [fullscreen, setFullscreen] = useState(false);
   const [diagnostics, setDiagnostics] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
-  const [linesMode, setLinesMode] = useState(false);
-  const [activeView, setActiveView] = useState<ViewKey>(
-    view === 'charts' ? 'chart' : view === 'heatmap' ? 'heatmap' : 'footprint',
-  );
   const [settings, setSettings] = useState<HeatmapSettings>(
     () => loadSettings(typeof window === 'undefined' ? null : window.localStorage),
   );
@@ -200,6 +209,13 @@ export function TerminalView({
     [chart.candles, live?.price, interval, bookState.book?.asOf],
   );
   const plan = useMemo(() => buildPlanContext(scanRow, price), [scanRow, price]);
+  const viewTrades = mockTape?.trades ?? trades;
+  const viewMid = mockTape
+    ? mockTape.frames[mockTape.frames.length - 1]?.mid ?? MOCK_BTC_PRICE
+    : book?.mid ?? price ?? 0;
+  const viewStats = tapeStats(viewTrades, viewMid, INTERVAL_MS[interval], Date.now());
+  const lastTradeAt = mockTape?.trades[mockTape.trades.length - 1]?.t ?? bookState.stats.lastTradeAt;
+  const tradeAge = lastTradeAt ? Math.max(0, Date.now() - lastTradeAt) : null;
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -213,10 +229,6 @@ export function TerminalView({
       ))
       .slice(0, 120);
   }, [markets.data, query]);
-
-  useEffect(() => {
-    setActiveView(view === 'charts' ? 'chart' : view === 'heatmap' ? 'heatmap' : 'footprint');
-  }, [view]);
 
   useEffect(() => {
     saveSettings(settings, typeof window === 'undefined' ? null : window.localStorage);
@@ -262,7 +274,7 @@ export function TerminalView({
 
   useEffect(() => {
     const el = chartBodyRef.current;
-    if (!el || activeView !== 'chart') return;
+    if (!el || view !== 'charts') return;
     const measure = () => {
       const h = el.clientHeight;
       if (h > 120) setChartH(Math.round(h));
@@ -271,13 +283,22 @@ export function TerminalView({
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [activeView, fullscreen]);
+  }, [view, fullscreen]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && /INPUT|TEXTAREA|SELECT/.test(target.tagName)) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (/^[0-9]$/.test(event.key)) {
+        const index = event.key === '0' ? 9 : Number(event.key) - 1;
+        const entry = VIEW_TABS[index];
+        if (entry) {
+          event.preventDefault();
+          setPage(entry.key);
+        }
+        return;
+      }
       const key = event.key.toLowerCase();
       if (key === 'f') {
         event.preventDefault();
@@ -292,7 +313,6 @@ export function TerminalView({
       if (key === 'escape') {
         setPicker(false);
         setDiagnostics(false);
-        setLinesMode(false);
         return;
       }
       if (key === 't') {
@@ -316,17 +336,6 @@ export function TerminalView({
       if (key === 'r') {
         event.preventDefault();
         window.dispatchEvent(new CustomEvent('heatmap-reset'));
-        return;
-      }
-      if (key === 'l') {
-        event.preventDefault();
-        setLinesMode((value) => !value);
-        return;
-      }
-      const next = VIEWS.find((item) => item.hotkey === key);
-      if (next) {
-        event.preventDefault();
-        setActiveView(next.key);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -337,6 +346,8 @@ export function TerminalView({
   const stream = bookState.streamState;
   const feed = feedOf(mode, stream, bookAge);
   const feedDetail = feedDetailOf(feed, bookAge);
+  const feedDiagnostic = `lag ${bookAge ?? 0} ms \u00b7 ${bookState.stats.messagesPerSec.toFixed(0)} messages/s \u00b7 ${bookState.stats.resyncs} book resyncs \u00b7 ${bookState.stats.reconnects} reconnects`;
+  const feedTitle = `Book age ${bookAge ?? DASH} ms \u00b7 trade age ${tradeAge ?? DASH} ms \u00b7 ${bookState.stats.messagesPerSec.toFixed(0)} messages/s`;
   const toggleLayer = (key: keyof LayerToggles) => setLayers((prev) => ({ ...prev, [key]: !prev[key] }));
   const updateSettings = (patch: Partial<HeatmapSettings>) => setSettings((prev) => ({ ...prev, ...patch }));
 
@@ -345,7 +356,7 @@ export function TerminalView({
   const bookError = bookState.error;
 
   const renderView = () => {
-    if (activeView === 'heatmap') {
+    if (page === 'heatmap') {
       return (
         <HeatmapView
           symbol={symbol}
@@ -374,7 +385,7 @@ export function TerminalView({
         />
       );
     }
-    if (activeView === 'chart') {
+    if (page === 'charts') {
       return (
         <section className="terminal-panel terminal-panel--chart">
           <div className="terminal-chart-body" ref={chartBodyRef}>
@@ -404,7 +415,7 @@ export function TerminalView({
         </section>
       );
     }
-    if (activeView === 'footprint') {
+    if (page === 'footprint') {
       return (
         <FootprintView
           symbol={symbol}
@@ -419,14 +430,31 @@ export function TerminalView({
         />
       );
     }
-    if (activeView === 'whales') return <WhalesView trades={trades} />;
-    if (activeView === 'volume-profile') return <VolumeProfileView trades={trades} mid={price} />;
-    if (activeView === 'gamma') return <GammaView snapshot={gamma} error={gammaError} base={base} />;
-    if (activeView === 'tape') return <TapeView trades={trades} />;
-    if (activeView === 'l3') return <L3EventsView frames={frames} trades={trades} />;
-    if (activeView === 'futures') return <FuturesView row={scanRow} base={base} />;
-    if (activeView === 'sentiment') return <SentimentView row={scanRow} plan={plan} base={base} />;
-    return <GuideView />;
+    if (page === 'tape') {
+      return <TapeView trades={trades} />;
+    }
+    if (page === 'whales') {
+      return <WhalesView trades={trades} />;
+    }
+    if (page === 'volprofile') {
+      return <VolProfileView symbol={symbol} timeframe={interval} mode={mode} />;
+    }
+    if (page === 'gamma') {
+      return <GammaView snapshot={gamma} error={gammaError} base={base} />;
+    }
+    if (page === 'l3') {
+      return <L3EventsView frames={frames} trades={trades} />;
+    }
+    if (page === 'futures') {
+      return <FuturesView row={scanRow} base={base} />;
+    }
+    if (page === 'sentiment') {
+      return <SentimentView row={scanRow} plan={plan} base={base} />;
+    }
+    if (page === 'guide') {
+      return <GuideView />;
+    }
+    return null;
   };
 
   return (
@@ -522,15 +550,6 @@ export function TerminalView({
           <div className="line-seg" role="group" aria-label="Chart lines">
             <button
               type="button"
-              className={`line-btn line-btn--lines${linesMode ? ' is-on' : ''}`}
-              aria-pressed={linesMode}
-              onClick={() => setLinesMode((value) => !value)}
-              title="Draw horizontal price lines"
-            >
-              Lines
-            </button>
-            <button
-              type="button"
               className={`line-btn line-btn--plan${layers.plan ? ' is-on' : ''}`}
               aria-pressed={layers.plan}
               onClick={() => toggleLayer('plan')}
@@ -563,7 +582,7 @@ export function TerminalView({
           <button
             type="button"
             className={`feed-badge is-${feed.toLowerCase()}`}
-            title={feedDetail}
+            title={feed === 'LIVE' ? feedTitle : feedDetail}
             onClick={() => setDiagnostics((value) => !value)}
             aria-expanded={diagnostics}
             aria-haspopup="dialog"
@@ -573,9 +592,7 @@ export function TerminalView({
             <span className="feed-caret" aria-hidden>▾</span>
           </button>
           <span className="feed-inline" title="Feed diagnostics">
-            {feed === 'LIVE' && bookAge !== null
-              ? `Book age ${Math.round(bookAge)} ms · ${bookState.stats.messagesPerSec.toFixed(0)} messages/s`
-              : feedDetail}
+            {feed === 'LIVE' ? feedDiagnostic : feedDetail}
           </span>
           {diagnostics && (
             <div className="feed-diagnostics" role="dialog" aria-label="Feed diagnostics">
@@ -603,45 +620,55 @@ export function TerminalView({
 
       <div className="tradfye-workspace">
         <div className="tradfye-main">
-          {view !== 'heatmap' && (
           <div className="tradfye-viewbar">
-            <div className="tradfye-tabs" role="tablist" aria-label="Terminal views">
-              {VIEWS.map((item) => (
+            <div className="tradfye-tabs" role="tablist" aria-label="Trading view">
+              {VIEW_TABS.map((t) => (
                 <button
-                  key={item.key}
+                  key={t.key}
                   type="button"
                   role="tab"
-                  id={`tradfye-tab-${item.key}`}
-                  aria-selected={activeView === item.key}
-                  aria-controls="tradfye-view-panel"
-                  tabIndex={activeView === item.key ? 0 : -1}
-                  className={`tradfye-tab${activeView === item.key ? ' is-on' : ''}`}
-                  title={item.hotkey ? `${item.label} · press ${item.hotkey}` : item.label}
-                  onClick={() => setActiveView(item.key)}
+                  aria-selected={page === t.key}
+                  className={`tradfye-tab${page === t.key ? ' is-on' : ''}`}
+                  title={t.title}
+                  onClick={() => setPage(t.key)}
                 >
-                  {item.label}
+                  {t.label}
                 </button>
               ))}
+              <button
+                type="button"
+                className="tradfye-tab tradfye-tab--help"
+                aria-label="Open the guide"
+                title="How to read this terminal"
+                onClick={() => setPage('guide')}
+              >
+                ?
+              </button>
             </div>
             <select
               className="tradfye-view-select"
-              aria-label="Terminal view"
-              value={activeView}
-              onChange={(event) => setActiveView(event.target.value as ViewKey)}
+              aria-label="Trading view"
+              value={page}
+              onChange={(e) => setPage(e.target.value as TerminalPage)}
             >
-              {VIEWS.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+              {VIEW_TABS.map((t) => (
+                <option key={t.key} value={t.key}>{t.label}</option>
+              ))}
             </select>
             <div className="terminal-view-stats" aria-label="Terminal status">
-              <span><small>Pair</small><b>{base}/USDT</b></span>
-              <span><small>TF</small><b>{interval === '1d' ? '1D' : interval}</b></span>
-              <span><small>Feed</small><b className={feed === 'LIVE' ? 'is-up' : feed === 'STALE' || feed === 'MOCK' ? 'is-down' : ''}>{feed}</b></span>
+              <span>
+                <small>{interval} candle Δ</small>
+                <b className={viewStats.candleDeltaQty >= 0 ? 'is-up' : 'is-down'}>{viewStats.candleDeltaQty.toFixed(2)} {base}</b>
+              </span>
+              <span><small>CVD</small><b className={viewStats.cvdUsd >= 0 ? 'is-up' : 'is-down'}>{viewStats.cvdUsd >= 0 ? '+' : ''}{fmtUsd(viewStats.cvdUsd)}</b></span>
+              <span><small>POC</small><b className="is-poc">{viewStats.poc === null ? DASH : priceText(viewStats.poc)}</b></span>
             </div>
             <button
               type="button"
               className="terminal-expand"
               onClick={() => setFullscreen((value) => !value)}
-              title={fullscreen ? 'Exit full screen (F)' : 'Full screen (F)'}
-              aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}
+              title={fullscreen ? 'Exit chart fullscreen' : 'Expand chart and columns to fullscreen'}
+              aria-label={fullscreen ? 'Exit chart fullscreen' : 'Enter chart fullscreen'}
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
                 {fullscreen
@@ -650,8 +677,7 @@ export function TerminalView({
               </svg>
             </button>
           </div>
-          )}
-          <div id="tradfye-view-panel" className="tradfye-view-body" role="tabpanel" aria-labelledby={view === 'heatmap' ? undefined : `tradfye-tab-${activeView}`}>
+          <div id="tradfye-view-panel" className="tradfye-view-body">
             {renderView()}
           </div>
         </div>
@@ -663,7 +689,7 @@ export function TerminalView({
           open={railOpen}
           onOpen={() => setRailOpen(true)}
           onClose={() => setRailOpen(false)}
-          signalOverride={mode === 'MOCK' ? 'WAIT' : undefined}
+          signalOverride={feed === 'LIVE' ? undefined : 'WAIT'}
         />
       </div>
     </section>

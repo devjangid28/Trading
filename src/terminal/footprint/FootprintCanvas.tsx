@@ -222,6 +222,17 @@ function formatCell(value: number, units: 'usd' | 'btc'): string {
   return units === 'btc' ? fpCompactQty(value) : fpCompactUsd(value);
 }
 
+function cellFontSize(rowH: number, large: number, medium: number): number {
+  if (rowH >= 18) return large;
+  if (rowH >= 13) return medium;
+  if (rowH >= 8) return 9;
+  return Math.max(3, rowH);
+}
+
+function cellTextFits(clippedH: number, font: number): boolean {
+  return clippedH >= Math.min(7, font * 0.75);
+}
+
 function chooseAxisStep(pxPerPrice: number): number {
   const raw = pxPerPrice * FOOTPRINT.AXIS_TARGET_PX;
   const ladder = [1, 2, 5, 10, 25, 50, 100, 200, 500, 1_000];
@@ -293,6 +304,14 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
       frameRef.current = 0;
       drawRef.current();
     });
+    // rAF is occasionally dropped by Chromium after a resize; a watchdog
+    // guarantees the canvas is painted instead of staying transparent.
+    window.setTimeout(() => {
+      if (!frameRef.current) return;
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+      drawRef.current();
+    }, 120);
   }, []);
 
   useEffect(() => {
@@ -321,8 +340,23 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
-    schedule();
-  }, [size, schedule]);
+    // Setting width/height clears the bitmap. Paint immediately so a dropped
+    // rAF can never leave the chart area black after a resize.
+    drawRef.current();
+  }, [size]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onLost = (event: Event) => { event.preventDefault(); };
+    const onRestored = () => { schedule(); };
+    canvas.addEventListener('contextlost', onLost);
+    canvas.addEventListener('contextrestored', onRestored);
+    return () => {
+      canvas.removeEventListener('contextlost', onLost);
+      canvas.removeEventListener('contextrestored', onRestored);
+    };
+  }, [schedule]);
 
   useEffect(() => {
     setOffscreenExpanded(false);
@@ -342,7 +376,8 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
     const w = size.w;
     const h = size.h;
     const infoH = FOOTPRINT.INFO_H;
-    const headerH = settings.showBuySellPct ? FOOTPRINT.HEADER_H : 0;
+    const buySellH = settings.showBuySellPct ? FOOTPRINT.HEADER_H : 0;
+    const headerH = buySellH + FOOTPRINT.PRICE_HEADER_H;
     const summaryH = settings.showSummary ? FOOTPRINT.SUMMARY_H : 0;
     const compact = w < 720;
     const axisW = compact ? 58 : w < 820 ? 76 : FOOTPRINT.AXIS_W;
@@ -352,6 +387,9 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
     const plotBottom = Math.max(plotTop + 40, h - summaryH);
     const plotRight = w - axisW;
     const plotH = Math.max(40, plotBottom - plotTop);
+    // Auto row size is chosen from the plot before the OHLC band existed, so
+    // the new readout cannot change which footprint rows get merged.
+    const autoPlotH = Math.max(40, plotBottom - (infoH + buySellH));
     const candles = dataset.candles;
     const n = candles.length;
 
@@ -413,7 +451,7 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
       high = dataset.lastPrice * 1.001;
       low = dataset.lastPrice * 0.999;
     }
-    const autoRowSize = resolveAutoRowSize(rangeColumns.map((column) => column.candle), plotH);
+    const autoRowSize = resolveAutoRowSize(rangeColumns.map((column) => column.candle), autoPlotH);
     if (Math.abs(autoRowSize - lastAutoRef.current) > 1e-9) {
       lastAutoRef.current = autoRowSize;
       onAutoRowSize(autoRowSize);
@@ -504,6 +542,7 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         const clippedY = Math.max(plotTop, y);
         const clippedH = Math.min(plotBottom, y + height) - clippedY;
         if (clippedH <= 0) continue;
+        const fullyVisible = y >= plotTop && y + height <= plotBottom;
 
         const bidMax = settings.units === 'btc' ? row.bidQty : row.bidUsd;
         const askMax = settings.units === 'btc' ? row.askQty : row.askUsd;
@@ -520,19 +559,20 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         drawColourBar(leftX, clippedY, column.cellW, clippedH, hexAlpha(COLORS.bidBar, 0.5 + 0.5 * normalBid), bidFrac, true);
         drawColourBar(rightX, clippedY, column.cellW, clippedH, hexAlpha(COLORS.askBar, 0.5 + 0.5 * normalAsk), askFrac, false);
 
-        if (rowH >= 10) {
+        if (rowH >= 2) {
           const rowMax = Math.max(bidMax, askMax);
           const rowMaxFraction = max > 0 ? rowMax / max : 0;
           const bidText = formatCell(bidMax, settings.units);
           const askText = formatCell(askMax, settings.units);
-          setFont(ctx, rowH >= 18 ? 11 : rowH >= 13 ? 10 : 9, row.buyImbalance || row.sellImbalance ? 700 : 500);
+          const font = cellFontSize(rowH, 11, 10);
+          setFont(ctx, font, row.buyImbalance || row.sellImbalance ? 700 : 500);
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'right';
           ctx.fillStyle = row.sellImbalance || rowMaxFraction >= FOOTPRINT.WHITE_TEXT_AT ? '#ffffff' : COLORS.cellText;
-          if (bidMax > 0 && clippedH > 7) ctx.fillText(bidText, leftX + column.cellW - 4, clippedY + clippedH / 2);
+          if (bidMax > 0 && (fullyVisible || cellTextFits(clippedH, font))) ctx.fillText(bidText, leftX + column.cellW - 4, clippedY + clippedH / 2);
           ctx.textAlign = 'left';
           ctx.fillStyle = row.buyImbalance || rowMaxFraction >= FOOTPRINT.WHITE_TEXT_AT ? '#ffffff' : COLORS.cellText;
-          if (askMax > 0 && clippedH > 7) ctx.fillText(askText, rightX + 4, clippedY + clippedH / 2);
+          if (askMax > 0 && (fullyVisible || cellTextFits(clippedH, font))) ctx.fillText(askText, rightX + 4, clippedY + clippedH / 2);
           ctx.textBaseline = 'alphabetic';
         }
       }
@@ -548,6 +588,7 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         const clippedY = Math.max(plotTop, y);
         const clippedH = Math.min(plotBottom, y + height) - clippedY;
         if (clippedH <= 0) continue;
+        const fullyVisible = y >= plotTop && y + height <= plotBottom;
         const delta = settings.units === 'btc' ? row.askQty - row.bidQty : row.askUsd - row.bidUsd;
         const fraction = scaleSize(Math.abs(delta), settings.units === 'btc' ? Math.max(1e-9, maxCell / Math.max(1, dataset.lastPrice)) : Math.max(1e-9, maxCell), settings.colorScale);
         ctx.fillStyle = COLORS.cellBg;
@@ -560,15 +601,16 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         if (settings.showCellBars) {
           ctx.fillRect(positive ? x + width / 2 : x + width / 2 - barW, clippedY, positive ? barW : barW, clippedH);
         }
-        if (rowH >= 10) {
+        if (rowH >= 2) {
           const text = settings.units === 'btc'
             ? `${delta >= 0 ? '+' : '\u2212'}${Math.abs(delta).toFixed(2)}`
             : fpSignedUsd(delta);
-          setFont(ctx, rowH >= 18 ? 11 : rowH >= 13 ? 10 : 9, row.buyImbalance || row.sellImbalance ? 700 : 500);
+          const font = cellFontSize(rowH, 11, 10);
+          setFont(ctx, font, row.buyImbalance || row.sellImbalance ? 700 : 500);
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'center';
           ctx.fillStyle = fraction >= FOOTPRINT.WHITE_TEXT_AT ? '#ffffff' : COLORS.cellText;
-          if (clippedH > 7) ctx.fillText(text, x + width / 2, clippedY + clippedH / 2);
+          if (fullyVisible || cellTextFits(clippedH, font)) ctx.fillText(text, x + width / 2, clippedY + clippedH / 2);
           ctx.textBaseline = 'alphabetic';
         }
       }
@@ -585,6 +627,7 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         const clippedY = Math.max(plotTop, y);
         const clippedH = Math.min(plotBottom, y + height) - clippedY;
         if (clippedH <= 0) continue;
+        const fullyVisible = y >= plotTop && y + height <= plotBottom;
         const isPoc = Math.abs(row.price - column.candle.pocRowPrice) < 1e-9;
         const fraction = scaleSize(value, settings.units === 'btc'
           ? Math.max(1e-9, (maxCell * 2) / Math.max(1, dataset.lastPrice))
@@ -600,12 +643,13 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
           ctx.lineWidth = 1;
           ctx.strokeRect(x + 0.5, clippedY + 0.5, width - 1, Math.max(0.5, clippedH - 1));
         }
-        if (rowH >= 10) {
-          setFont(ctx, rowH >= 18 ? 11 : rowH >= 13 ? 10 : 9, isPoc ? 700 : 500);
+        if (rowH >= 2) {
+          const font = cellFontSize(rowH, 11, 10);
+          setFont(ctx, font, isPoc ? 700 : 500);
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'center';
           ctx.fillStyle = isPoc ? '#fde68a' : (fraction >= FOOTPRINT.WHITE_TEXT_AT ? '#ffffff' : COLORS.cellText);
-          if (clippedH > 7) {
+          if (fullyVisible || cellTextFits(clippedH, font)) {
             ctx.fillText(settings.units === 'btc' ? fpCompactQty(value) : fpCompactUsd(value), x + width / 2, clippedY + clippedH / 2);
           }
           ctx.textBaseline = 'alphabetic';
@@ -654,6 +698,7 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         const clippedY = Math.max(plotTop, y);
         const clippedH = Math.min(plotBottom, y + height) - clippedY;
         if (clippedH <= 0) continue;
+        const fullyVisible = y >= plotTop && y + height <= plotBottom;
         const delta = settings.units === 'btc' ? row.askQty - row.bidQty : row.askUsd - row.bidUsd;
         const total = settings.units === 'btc' ? row.askQty + row.bidQty : row.askUsd + row.bidUsd;
         const deltaFrac = scaleSize(Math.abs(delta), Math.max(1e-9, maxCell), settings.colorScale);
@@ -668,12 +713,13 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
           ctx.fillStyle = hexAlpha(COLORS.volumeBar, 0.75);
           ctx.fillRect(rightX, clippedY, volumeFrac * rightW, clippedH);
         }
-        if (rowH >= 10) {
-          setFont(ctx, rowH >= 18 ? 10 : 9, 500);
+        if (rowH >= 2) {
+          const font = cellFontSize(rowH, 10, 9);
+          setFont(ctx, font, 500);
           ctx.textBaseline = 'middle';
           ctx.textAlign = 'center';
           ctx.fillStyle = COLORS.cellText;
-          if (clippedH > 7) {
+          if (fullyVisible || cellTextFits(clippedH, font)) {
             const deltaText = settings.units === 'btc'
               ? `${delta >= 0 ? '+' : '\u2212'}${Math.abs(delta).toFixed(2)}`
               : fpSignedUsd(delta);
@@ -793,8 +839,63 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
         ctx.fillText(`S ${Math.round(sell)}%`, cx, infoH + 25);
         ctx.textBaseline = 'alphabetic';
       }
+    }
+
+    // Per-candle OHLC readout. Every visible candle carries its own prices in
+    // the band under the header, so the numbers no longer require a hover, a
+    // click or panning the chart to a particular candle. Each block gets a
+    // subtle well and a divider so neighbouring columns read as separate
+    // cards instead of one continuous line of numbers.
+    {
+      const priceTop = infoH + buySellH;
+      const bandH = FOOTPRINT.PRICE_HEADER_H;
+      const available = Math.max(24, colW - 6);
+      const tight = colW < FOOTPRINT.PRICE_LABEL_NARROW;
+      const labelPrice = (value: number): string => {
+        if (!Number.isFinite(value)) return '\u2014';
+        if (colW >= FOOTPRINT.PRICE_LABEL_NARROW) return fpPrice(value);
+        const abs = Math.abs(value);
+        if (abs >= 100) return value.toFixed(1);
+        if (abs >= 1) return value.toFixed(2);
+        if (abs >= 0.01) return value.toFixed(4);
+        if (abs > 0) return value.toFixed(6);
+        return '0';
+      };
       ctx.fillStyle = 'rgba(31,41,55,0.7)';
       ctx.fillRect(0, infoH + headerH - 0.5, plotRight, 0.5);
+      if (buySellH > 0) {
+        ctx.fillStyle = 'rgba(31,41,55,0.45)';
+        ctx.fillRect(0, priceTop - 0.5, plotRight, 0.5);
+      }
+      for (const column of columns) {
+        ctx.fillStyle = 'rgba(255,255,255,0.04)';
+        ctx.fillRect(column.x + 1, priceTop + 2, Math.max(12, column.width - 2), bandH - 4);
+      }
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (const column of columns) {
+        const candle = column.candle;
+        const first = tight
+          ? `O${labelPrice(candle.o)} H${labelPrice(candle.h)}`
+          : `O ${labelPrice(candle.o)} H ${labelPrice(candle.h)}`;
+        const second = tight
+          ? `L${labelPrice(candle.l)} C${labelPrice(candle.c)}`
+          : `L ${labelPrice(candle.l)} C ${labelPrice(candle.c)}`;
+        setFont(ctx, FOOTPRINT.PRICE_LABEL_FONT, 500);
+        const widest = Math.max(ctx.measureText(first).width, ctx.measureText(second).width);
+        const font = clamp(
+          (FOOTPRINT.PRICE_LABEL_FONT * available) / Math.max(1, widest),
+          FOOTPRINT.PRICE_LABEL_MIN_FONT,
+          FOOTPRINT.PRICE_LABEL_FONT,
+        );
+        setFont(ctx, font, 500);
+        const cx = column.x + column.width / 2;
+        ctx.fillStyle = '#b6bdc9';
+        ctx.fillText(first, cx, priceTop + 9);
+        ctx.fillStyle = '#e6e9ef';
+        ctx.fillText(second, cx, priceTop + 20);
+      }
+      ctx.textBaseline = 'alphabetic';
     }
 
     // Levels: horizontal lines across the plot.
@@ -1191,24 +1292,34 @@ export function FootprintCanvas(props: FootprintCanvasProps) {
 
     // Notable-event dots sit on the outer edge of the cell so the printed
     // number stays legible.
+    const compactDots = layout.w < 720;
     for (const column of columns) {
       for (const marker of column.candle.notable) {
         const row = column.candle.rows.find((item) => Math.abs(item.price - marker.price) < 1e-9);
         if (!row) continue;
-        const y = yForPrice(row.price) - 1;
+        const radius = compactDots ? 4 : 6;
+        const inset = compactDots ? 5 : 8;
+        const y = compactDots ? yForPrice(row.price) - rowH / 2 + radius + 1 : yForPrice(row.price) - 1;
         if (y < plotTop || y > plotBottom) continue;
         const x = marker.side === 'ask'
-          ? column.x + column.laneW + column.cellW + column.innerGap + column.cellW - 8
-          : column.x + column.laneW + 8;
+          ? column.x + column.laneW + column.cellW + column.innerGap + column.cellW - inset
+          : column.x + column.laneW + inset;
         if (rowH >= 8) {
           ctx.beginPath();
-          ctx.arc(x, y, 6, 0, Math.PI * 2);
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
           ctx.fillStyle = '#22c55e';
           ctx.fill();
           ctx.strokeStyle = '#ffffff';
           ctx.lineWidth = 1.5;
           ctx.stroke();
-          layout.notableBoxes.push({ x: x - 8, y: y - 8, w: 16, h: 16, candleT: column.candle.t, id: marker.id });
+          layout.notableBoxes.push({
+            x: x - radius - 2,
+            y: y - radius - 2,
+            w: radius * 2 + 4,
+            h: radius * 2 + 4,
+            candleT: column.candle.t,
+            id: marker.id,
+          });
         }
       }
     }

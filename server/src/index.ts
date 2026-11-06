@@ -21,6 +21,7 @@ import { yahooChartCached } from './data/yahoo.js';
 import { fetchKlines, primeKlines } from './data/binance.js';
 import {
   normalizeTerminalSymbol, parseTerminalInterval, terminalBook, terminalCandles,
+  terminalKlinesLong,
 } from './terminal/data.js';
 import { historyWindow, parseTerminalSpan } from './terminal/history.js';
 import { readTerminalHistory } from './terminal/historyStore.js';
@@ -1174,6 +1175,28 @@ app.get('/api/terminal/candles', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
     res.json(await terminalCandles(symbol, interval, limit));
+  } catch (err) {
+    res.status(503).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * Long kline history for the volume-profile view. Unlike /terminal/candles
+ * (a render-sized tail capped at 500) this walks back in 1000-candle pages up
+ * to 12,000 1m candles and is the only route that can fill the profile cache.
+ */
+app.get('/api/terminal/klines', async (req, res) => {
+  const symbol = normalizeTerminalSymbol(req.query.symbol);
+  const interval = parseTerminalInterval(req.query.interval) ?? '1m';
+  if (!symbol) {
+    res.status(400).json({ error: 'symbol must be an uppercase USDT spot pair' });
+    return;
+  }
+  const requested = Number(req.query.limit);
+  const limit = Number.isFinite(requested) && requested > 0 ? requested : undefined;
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    res.json(await terminalKlinesLong(symbol, interval, limit));
   } catch (err) {
     res.status(503).json({ error: (err as Error).message });
   }

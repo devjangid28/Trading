@@ -57,7 +57,7 @@ function readingFor(dataset: FootprintDataset, candle: FootprintCandle | null): 
   }
 
   const poc = candle.pocPrice > 0 ? fpPrice(candle.pocPrice) : DASH;
-  return `This candle: \u0394 ${signedQty(candle.deltaQty)} \u2014 ${verdict}. Most volume at ${poc} (POC). Imbalances: ${candle.imbalanceBuy} buy / ${candle.imbalanceSell} sell rows.`;
+  return `This candle: O ${fpPrice(candle.o)} H ${fpPrice(candle.h)} L ${fpPrice(candle.l)} C ${fpPrice(candle.c)} \u2014 \u0394 ${signedQty(candle.deltaQty)} \u2014 ${verdict}. Most volume at ${poc} (POC). Imbalances: ${candle.imbalanceBuy} buy / ${candle.imbalanceSell} sell rows.`;
 }
 
 export interface FootprintViewProps {

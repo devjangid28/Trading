@@ -20,6 +20,8 @@ import { HomeView } from './home/HomeView';
 import { MarketsView } from './components/MarketsView';
 import { TerminalView } from './terminal/TerminalView';
 import { ChartsTerminal } from './charts/ChartsTerminal';
+import { WhalesView } from './whales/WhalesView';
+import { VolProfileView } from './volprofile/VolProfileView';
 import { DecisionRail } from './terminal/DecisionRail';
 import { StageView } from './stage/Stage';
 import { SignalsView } from './components/SignalsView';
@@ -31,6 +33,8 @@ type Tab =
   | 'charts'
   | 'heatmap'
   | 'footprint'
+  | 'whales'
+  | 'volprofile'
   | 'orderblock'
   | 'signals'
   | 'radar'
@@ -44,7 +48,7 @@ type Tab =
 type TicketType = 'hero' | 'standard';
 
 const TAB_IDS: Tab[] = [
-  'dashboard', 'charts', 'heatmap', 'footprint', 'orderblock', 'signals', 'radar',
+  'dashboard', 'charts', 'heatmap', 'footprint', 'whales', 'volprofile', 'orderblock', 'signals', 'radar',
   'markets', 'derivatives', 'news', 'india', 'journal', 'lab', 'learn',
 ];
 
@@ -160,6 +164,8 @@ function TabIcon({ id }: { id: Tab }) {
     charts: <><path d="M4 4v16" /><path d="M8 8v8" /><path d="M12 5v14" /><path d="M16 9v6" /><path d="M20 7v10" /></>,
     heatmap: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 9v12M15 9v12M3 15h18" /></>,
     footprint: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 8h18M3 12h18M3 16h18M9 8v12" /></>,
+    whales: <><path d="M4 9c0-3 4-5 8-5s8 2 8 5-4 5-8 5-8-2-8-5Z" /><path d="M12 14v4" /><path d="M9 14c2 4 4 4 6 0" /><path d="M4 9c1 4 4 6 8 6s7-2 8-6" /><path d="M2 7l3 1M22 7l-3 1" /></>,
+    volprofile: <><path d="M4 18V9" /><path d="M9 18V5" /><path d="M14 18v-7" /><path d="M19 18V3" /></>,
     markets: <><path d="M3 20V10" /><path d="M9 20V4" /><path d="M15 20v-7" /><path d="M21 20V7" /></>,
     orderblock: <><path d="M12 2 3 7l9 5 9-5-9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></>,
     signals: <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z" />,
@@ -224,7 +230,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (tab === 'heatmap') return;
+      if (tab === 'heatmap' || tab === 'footprint') return;
       const target = event.target as HTMLElement | null;
       if (target && /INPUT|TEXTAREA|SELECT/.test(target.tagName)) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -370,27 +376,14 @@ export default function App() {
     { id: 'charts', label: 'Charts' },
     { id: 'heatmap', label: 'Heatmap' },
     { id: 'footprint', label: 'Footprint' },
+    { id: 'whales', label: 'Whales' },
+    { id: 'volprofile', label: 'Vol profile' },
     { id: 'orderblock', label: 'Order Block' },
     { id: 'signals', label: 'Signals' },
     { id: 'radar', label: 'Radar' },
     { id: 'news', label: 'News' },
     { id: 'india', label: 'India' },
   ];
-
-  if (tab === 'heatmap' || tab === 'footprint') {
-    return (
-      <div className="tradfye-standalone">
-        <TerminalView
-          view={tab}
-          symbol={terminalSymbol}
-          onSymbol={setTerminalSymbol}
-          mode={mode}
-          rows={allRows}
-          onExit={() => setTab('dashboard')}
-        />
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-full flex flex-col" style={{ background: 'var(--bg)' }}>
@@ -512,6 +505,18 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 min-h-0 p-3 lg:p-4">
+        {tab === 'heatmap' || tab === 'footprint' ? (
+          <div className="h-full min-h-0">
+            <TerminalView
+              view={tab}
+              symbol={terminalSymbol}
+              onSymbol={setTerminalSymbol}
+              mode={mode}
+              rows={allRows}
+              onExit={() => setTab('dashboard')}
+            />
+          </div>
+        ) : (
         <div className={`app-main${railOpen ? ' has-rail' : ''}`}>
           <div className="app-main-page">
         {scan.error && !data && (
@@ -538,6 +543,23 @@ export default function App() {
 
         {tab === 'charts' && (
           <ChartsTerminal symbol={terminalSymbol} onSymbol={setTerminalSymbol} />
+        )}
+
+        {tab === 'whales' && (
+          <div className="h-full min-h-0">
+            <WhalesView
+              symbol={terminalSymbol}
+              onSymbol={setTerminalSymbol}
+              mode={mode}
+              rows={allRows}
+            />
+          </div>
+        )}
+
+        {tab === 'volprofile' && (
+          <div className="h-full min-h-0">
+            <VolProfileView symbol={terminalSymbol} timeframe="15m" mode={mode} />
+          </div>
         )}
 
         {tab === 'orderblock' && data && (
@@ -711,6 +733,7 @@ export default function App() {
             onClose={() => setRailOpen(false)}
           />
         </div>
+        )}
       </main>
 
       {/*

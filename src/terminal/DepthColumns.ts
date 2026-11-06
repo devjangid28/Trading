@@ -167,17 +167,17 @@ function drawHeader(
   ctx.moveTo(x + 0.5, 0);
   ctx.lineTo(x + 0.5, input.bottom);
   ctx.stroke();
-  ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   ctx.fillStyle = '#aeb6c4';
 
   if (key === 'delta') {
-    ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.fillText(`\u0394 ${input.spanLabel}`, x + 5, 10);
     ctx.textAlign = 'right';
     ctx.fillStyle = delta >= 0 ? '#4ade80' : '#f87171';
-    ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.fillText(signed(delta), x + width - 5, 10);
   } else if (key === 'bid') {
     ctx.fillStyle = '#4ade80';
@@ -196,12 +196,12 @@ function drawHeader(
     const thresholdText = threshold >= 100_000
       ? `$${Math.round(threshold / 1e3)}K`
       : threshold >= 1e3 ? `$${(threshold / 1e3).toFixed(1)}K` : `$${threshold.toFixed(0)}`;
-    ctx.font = '700 7.5px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText(`tape \u2265 ${thresholdText}`, x + 5, 9);
+    ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText(`tape \u2265 ${thresholdText}`, x + 5, 10);
     ctx.textAlign = 'right';
     ctx.fillStyle = '#5e6a7a';
-    ctx.font = '7px ui-monospace, SFMono-Regular, Menlo, monospace';
-    ctx.fillText('last 1 min', x + width - 5, 9);
+    ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.fillText('last 1 min', x + width - 5, 10);
     const barW = Math.max(1, width - 10);
     const total = tapeBuy + tapeSell;
     ctx.fillStyle = 'rgba(248,113,113,0.55)';
@@ -302,7 +302,7 @@ function drawAlignedColumn(
     ctx.stroke();
 
     const textY = y + rowH / 2;
-    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.textBaseline = 'middle';
     const innerW = Math.max(4, width - 10);
 
@@ -327,9 +327,9 @@ function drawAlignedColumn(
         ctx.fillStyle = 'rgba(178,58,58,0.34)';
         ctx.fillRect(x + width - 5 - w, y + 1, w, Math.max(1, rowH - 2));
       }
-      ctx.textAlign = 'right';
+      ctx.textAlign = 'left';
       ctx.fillStyle = delta > 0 ? '#bbf7d0' : delta < 0 ? '#fecaca' : '#6b7280';
-      ctx.fillText(delta === 0 ? '\u2014' : signed(delta), x + width - 5, textY);
+      ctx.fillText(delta === 0 ? '\u2014' : signed(delta), x + 5, textY);
     } else if (key === 'volume') {
       const buy = values.buy[row];
       const sell = values.sell[row];
@@ -421,7 +421,7 @@ function drawTape(ctx: CanvasRenderingContext2D, x: number, width: number, input
     .slice(0, Math.max(1, Math.floor((input.bottom - input.bodyTop - 4) / 19)))
     .map((trade) => ({ trade, strong: trade.usd >= Math.max(threshold * 5, 100_000) }));
   const rowH = 19;
-  ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+  ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
   ctx.textBaseline = 'middle';
   for (let i = 0; i < rows.length; i++) {
     const { trade, strong } = rows[i];
@@ -430,7 +430,7 @@ function drawTape(ctx: CanvasRenderingContext2D, x: number, width: number, input
     ctx.fillStyle = buy
       ? `rgba(47,158,68,${strong ? 0.30 : 0.14})`
       : `rgba(178,58,58,${strong ? 0.30 : 0.14})`;
-    ctx.fillRect(x, y, width, rowH);
+    ctx.fillRect(x, y, width * 0.62, rowH);
     ctx.strokeStyle = 'rgba(148,163,184,0.05)';
     ctx.beginPath();
     ctx.moveTo(x, y + rowH);

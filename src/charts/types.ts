@@ -124,15 +124,18 @@ export interface ChartSettings {
   sessions: Record<SessionId, boolean>;
   sidebarOpen: boolean;
   sidebarTab: SidebarTab;
+  /** Surface secondary-level break alerts (quieter than primary breaks). */
+  alertOnSecondaryBreaks: boolean;
 }
 
-export type SidebarTab = 'whales' | 'futures' | 'sentiment' | 'news' | 'guide';
+export type SidebarTab = 'whales' | 'futures' | 'sentiment' | 'news' | 'sr' | 'guide';
 
 export const SIDEBAR_TABS: { id: SidebarTab; label: string }[] = [
   { id: 'whales', label: 'Whales' },
   { id: 'futures', label: 'Futures' },
   { id: 'sentiment', label: 'Sentiment' },
   { id: 'news', label: 'News' },
+  { id: 'sr', label: 'S/R Engine' },
   { id: 'guide', label: 'Guide' },
 ];
 

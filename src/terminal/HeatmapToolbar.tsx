@@ -128,7 +128,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
       <div className="toolbar-row">
         <Segmented
           label="Span"
-          title="How much time the chart shows"
+          title="Span — how much time the heatmap shows"
           value={settings.span}
           options={SPAN_OPTIONS}
           labels={spanLabel}
@@ -136,7 +136,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
         />
         <Segmented
           label="Price range"
-          title="How much price area fits around the last price"
+          title="Price range — how much price fits around the last price"
           value={settings.range}
           options={RANGE_KEYS}
           labels={rangeLabel}
@@ -144,7 +144,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
         />
         <Segmented
           label="Contrast"
-          title="How strongly rare liquidity stands out"
+          title="Contrast — how much rare liquidity stands out"
           value={settings.contrast}
           options={CONTRAST_KEYS}
           labels={contrastLabel}
@@ -152,7 +152,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
         />
         <Segmented
           label="Bubbles"
-          title="How executed volume is grouped"
+          title="Bubbles — how executed volume is grouped"
           value={settings.bubbles}
           options={BUBBLE_KEYS}
           labels={bubbleLabel}
@@ -165,7 +165,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
             className={`toolbar-btn${open === 'columns' ? ' is-open' : ''}`}
             aria-expanded={open === 'columns'}
             onClick={() => toggle('columns')}
-            title="Show or hide columns beside the heatmap"
+            title="Columns — show, hide and reorder the right-hand columns"
           >
             <span aria-hidden>{'\u25a5'}</span> Columns ({columns.length})
           </button>
@@ -174,7 +174,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
             className={`toolbar-btn${more ? ' is-open' : ''}`}
             aria-expanded={more}
             onClick={() => setMore((value) => !value)}
-            title="More chart settings"
+            title="More — bubble size, step and colour settings"
           >
             <span aria-hidden>{more ? '\u25be' : '\u25b8'}</span> {more ? 'Less' : 'More'}
           </button>
@@ -256,7 +256,7 @@ export function HeatmapToolbar({ settings, onChange, library, history }: Heatmap
           )}
 
           {open === 'help' && (
-            <PopoverShell title="How to read the heatmap">
+            <PopoverShell title="Heatmap — resting orders and the trades into them">
               <div className="help-block">
                 <b>Resting liquidity</b>
                 <p>Each row is that order-book price over time. Cells are total resting bid and ask notional; hotter and yellower means more size. Empty means no recorded level, not zero.</p>

@@ -258,6 +258,8 @@ export const TERMINAL = {
   CHART_LIMIT: 320,
   /** [TUNED] Candle closes only need to be corrected every few seconds. */
   CHART_TTL_MS: 8_000,
+  /** [V] Binance klines page is 1000; 12 pages = 12,000 1m candles (~8.3 days). */
+  VOLPROFILE_MAX_CANDLES: 12_000,
   /** [TUNED] Full-depth books are rate-heavy; three seconds keeps the heatmap live. */
   SAMPLE_MS: 3_000,
   /**

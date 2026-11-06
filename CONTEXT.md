@@ -5,7 +5,7 @@
 >
 > Written: 10 October 2026 · Project root: `C:\Users\DK\Desktop\trading`
 > Stack: React 18 + Vite 6 + TypeScript 5.7 + Tailwind 4 (frontend) · Express 4 + tsx (engine)
-> Last updated: **28 October 2026** - Part XXIV.16 added (live Binance chart terminal, custom overlays, verified drawing smoke)
+> Last updated: **5 November 2026** - Part XLVII added (S/R engine: three-tier break strength labels + thresholds on the level type)
 >
 > **Parts I�?"IV are a historical record and are left as written.** Where a later part contradicts an
 > earlier one, the later part wins. Part XXIV.16 is current.
@@ -1232,6 +1232,15 @@ Found by the Playwright drawing smoke after the rectangle did not appear in the 
 | # | Bug | Symptom | Fix |
 |---|---|---|---|
 | 52 | **Custom drawing overlays declared too few steps** | `rectZone` had `totalStep: 2` and `longPosition` / `shortPosition` had `totalStep: 3`. klinecharts completes an overlay when `points.length >= totalStep - 1`, so a rectangle finished with one point and `createPointFigures` returned `[]`; long/short finished with two of three points and also rendered nothing. The toolbar looked active and the first click test passed because it asserted only that the overlay ID existed | `rectZone: totalStep 3`; long/short: `totalStep 4`. `qa/charts.spec.ts` now asserts `name`, `points`, `currentStep` and `totalStep` for both `rectZone` and `longPosition`; the rectangle is visible in `qa/screens/charts-02-drawings-desktop.png` |
+
+### 12.7 Footprint per-candle price visibility - 53
+
+Reported by the user on the Footprint page. This is a readout gap, not a data bug: every number
+printed by the fix comes from the candle that was already on the chart.
+
+| # | Bug | Symptom | Fix |
+|---|---|---|---|
+| 53 | **Candle OHLC was only reachable through interaction** | The selected candle's OHLC sat in the reading line and a hovered candle's OHLC in the tooltip, so reading a particular candle's prices meant hovering or panning the chart to it | `FootprintCanvas` prints `O/H` and `L/C` once per visible column in a new 28 px `FOOTPRINT.PRICE_HEADER_H` band under the B/S header (the first pass used 22 px; XXXIV.5 records the redesign). Narrow columns drop decimals, tighten the letter spacing and auto-fit the font to the column pitch. The B/S header, reading line, price axis, summary strip and interactions are unchanged |
 
 ---
 
@@ -7561,3 +7570,1917 @@ dev` before `npx playwright test`.
   mock deliverable is complete. Re-check the chart-drawing flake only if a fully green combined suite
   is required.
 
+---
+
+## Part XXVII - 29 Oct 2026: Footprint mock fidelity and live prev-day levels
+
+### XXVII.1 What changed
+
+- Mock reference corrections:
+  - 14:30 candle is now `O 80290 / H 80375 / L 80050 / C 80245`, with 13 exact rows and
+    POC `80237.50`.
+  - The forming 17:00 candle now has `O 80300 / H 80305 / L 79990 / C 80142.42`, 13 exact
+    rows, POC `80142.50`, volume `3.76M`, delta `−299584` (renders `−300K`), delta qty
+    `−3.740032` (renders `−3.74`), and `3 buy / 4 sell` imbalances. The notable `430K` ask
+    is on row index 6.
+  - 15:00 low is `80110.00`; 16:00 high is `80320.00`, so the UA annotations are inside
+    their source candle ranges.
+  - Mock levels are prev VAH `80920.00`, prev high `81240.00`, prev VAL `80780.00`,
+    prev low `80397.14`, user `80683.23`, plan buy `80210.00`, plan sell `80065.00`,
+    Γ call `81050.00`, Γ put `81150.00`, Γ pin `80850.00`, liq long `73371.67`.
+    The prev-day POC level `80550.00` was removed.
+- Live prev-day levels now exist in `levels.ts`:
+  - `prevDayProfile(candles, rowSize)` groups loaded candles by previous UTC day and
+    estimates high/low plus a 70% value area around the highest-volume typical price.
+  - `prevDayFootprintLevels(profile)` emits teal `prev day VAL (est.)`, `prev day VAH (est.)`,
+    `prev day high`, `prev day low`.
+  - `nakedPocAnnotation(profile, candles, rowSize)` emits an amber nPOC only when the
+    current day has not traded through the previous-day estimated POC ± half a row.
+  - `FootprintView` computes the profile only for the live path; the mock keeps its fixed
+    levels/annotations.
+- Toolbar `Load older` now has a history icon and a spinner while loading. `.fp-load-older`,
+  `.fp-spinner` and `@keyframes fp-spin` were added to `terminal.css`.
+- Summary strip row labels are drawn after the cells with a left gutter overlay, so the
+  oldest partial column cannot cover `Volume` / `Delta` / `Delta %` / `Cum Δ` / `Time`.
+- Notable-event dots moved to the outer edge of the cell (ask right, bid left) so the
+  `430K` value remains legible.
+
+This Part supersedes the corresponding facts in XXVI.2 and closes the "prev-day POC is a
+mock-only level" gap. It does not supersede XXVI.4's live-path warning: the live prev-day
+profile is implemented but has not been validated against a live stack.
+
+### XXVII.2 Verification - what was actually run
+
+```text
+npm run verify
+> tsc --noEmit
+Test Files  41 passed (41)
+     Tests  868 passed (868)
+  Duration  7.83s
+```
+
+The run still prints the pre-existing Vite esbuild warning `Duplicate key "regime" in
+object literal` from `server/test/mind.confluence.test.ts`; it is not a test failure.
+
+```text
+npm run build
+vite v6.4.4 building for production...
+124 modules transformed.
+dist/index.html                 3.05 kB │ gzip:   1.44 kB
+dist/assets/index-B5uWiX14.css  196.01 kB │ gzip:  35.31 kB
+dist/assets/index-C24BM73i.js   810.03 kB │ gzip: 240.87 kB
+built in 1.84s
+```
+
+Vite still warns that the JS chunk is above 500 kB; non-blocking.
+
+```text
+npx playwright test qa/footprint.spec.ts
+4 passed (8.1s)
+```
+
+That is desktop 2/2 and mobile 2/2 after the latest mock/toolbar/canvas changes. The mock
+server logged its expected `MOCK MODE` RSS blocks; no test failed.
+
+Screenshots inspected:
+
+- `qa/screens/footprint-01-mock-desktop.png`
+- `qa/screens/footprint-01-mock-mobile.png`
+
+The desktop screenshot shows the 25 USDT composition, the 13-row forming candle, the
+`Load older` history icon, summary labels in the left gutter, the outer-edge notable dot,
+and reading line `Δ -3.74`.
+
+### XXVII.3 Honest gaps after this Part
+
+- **Live prev-day levels are interval-dependent estimates.** They only appear when the
+  loaded candles cover the previous UTC day. On 1m/5m the current 320-candle window usually
+  does not, so the levels are absent rather than invented. No live visual QA has been done.
+- **Mock rows still staircase.** Each candle starts its rows at its own high, so adjacent
+  columns are not on one global 25 USDT price grid. The screenshots were inspected and the
+  offset is visible; there is no reference-confirmed requirement to snap them.
+- **Fixed Rows on mock still uses 25-spaced rows.** Regenerating/re-merging the mock for
+  `1×/2×/5×/10×` is not implemented.
+- **`Load older` anchoring is not asserted.** The test checks the candle count and tooltip;
+  the canvas remains latest-anchored.
+- **Full combined suite was attempted and failed environmentally.** `npx playwright test`
+  ran `112 passed, 16 skipped, 8 failed (7.6m)`. All eight failures were mobile
+  `qa/search.spec.ts` (6) and `qa/terminal.spec.ts` (2), with
+  `net::ERR_CONNECTION_REFUSED` at `http://127.0.0.1:5199` or "could not load the page
+  after retries". A leftover `npm run dev` from 22:23 was still listening on :5173/:8787
+  and sharing `node_modules/.vite` with the Playwright server. Killing that tree
+  (`taskkill /PID 9712 /T /F`) and rerunning only the failed specs gave `8 passed (11.5s)`.
+  This is the same Vite-cache race AGENTS.md warns about; it is not a Footprint regression.
+  The full suite was not rerun end-to-end after the cleanup.
+- **No live truth/stage1 run.** `npm run verify:truth` / `npm run verify:stage1` were not run.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXVII.4 Resume state
+
+- **Last updated:** 29 Oct 2026.
+- **Current part:** XXVII.
+- **Unit tests:** 868 passed (41 files).
+- **Build:** 124 modules; CSS `196.01 kB` (`35.31 kB` gzip); JS `810.03 kB`
+  (`240.87 kB` gzip).
+- **Browser:** `npx playwright test qa/footprint.spec.ts` -> 4 passed (desktop and mobile);
+  full suite -> `112 passed, 16 skipped, 8 failed` (stray `npm run dev` Vite-cache race);
+  clean rerun of the 8 failed mobile specs -> `8 passed (11.5s)`.
+- **Next:** inspect the latest desktop/mobile screenshots; if pixel parity requires a single
+  global row grid, change mock row generation deliberately and re-run the footprint spec.
+  If live prev-day levels matter, fetch 15m history independently of the selected interval
+  before computing the profile.
+
+---
+
+## Part XXVIII - 30 Oct 2026: live Footprint fills the chart instead of a sparse right edge
+
+### XXVIII.1 What changed
+
+- User report: the Footprint page looked blank / not "proper" in live mode. At 1366x768 the
+  chart showed only a few candles bunched at the right, with most of the plot empty.
+- Root cause was the live backfill, not the renderer. `useFootprintTrades` walked backward
+  sequentially, 48 pages x 1000 `aggTrades`, and stopped after 48 pages. At BTC's trade
+  rate that covered roughly one hour, so a 15m chart received only 2-5 candles. The direct
+  Binance endpoint was reachable; the first `net::ERR_ABORTED` in a dev load is React
+  StrictMode aborting the first effect pass, and the second pass completed.
+- `useFootprintTrades.ts` now probes the first and last aggregate-trade id in the requested
+  window, then fetches the exact id range in parallel batches of 10 pages (`limit=1000`).
+  The initial window is exactly 12 candle buckets ending at the current bucket. The newest
+  220,000 trades win if a window is wider than the cap. 429/5xx responses retry twice.
+- `Load older` now fills the remaining cap (rather than walking a fixed 80 pages), so it
+  cannot discard the older window it just fetched.
+- The live merge appends only trades with ids newer than the backfill tail; it no longer
+  re-merges and sorts the whole 100k+ trade array on every tape tick.
+- `aggregateTrades` checks whether the input is already time/id sorted and skips the
+  defensive sort when it is.
+- `qa/footprint.spec.ts` now derives the `From <date>, 08:45 AM UTC` label from the current
+  UTC day instead of hard-coding `Oct 29`; the mock is date-relative.
+- Deleted the temporary `qa/footprint-live-tmp.spec.ts` and the stale `data/qa.lock` that
+  pointed at a reused PID. No other page was changed.
+
+### XXVIII.2 Verification - what was actually run
+
+Live dev stack, 1366x768, real Binance data:
+
+```text
+elapsed 4838 ms
+toolbar: Settings | ? | 12 candles · 25 USDT rows
+reading: This candle: Δ -0.95 — quiet candle — too little volume to read.
+         Most volume at 80887.50 (POC). Imbalances: 1 buy / 0 sell rows.
+page errors: []
+```
+
+At 1920x1080 the same load showed `12 candles · 10 USDT rows`; at 390x844 the canvas
+measured `358 x 581` and rendered. A direct probe of the new fetch path returned
+`166,609` trades for the 12-candle window in `4,427 ms` (167 id-chunk requests in
+parallel batches). The chart screenshot at 1366 showed columns spanning the full plot,
+not the previous two-candle right edge.
+
+```text
+npm run build
+124 modules transformed.
+dist/index.html                 3.05 kB | gzip:   1.44 kB
+dist/assets/index-C9ku1Pv-.css 196.11 kB | gzip:  35.33 kB
+dist/assets/index-D3VZ1XOa.js  811.24 kB | gzip: 241.40 kB
+built in 1.60s
+```
+
+```text
+npm run verify
+Test Files  41 passed (41)
+     Tests  868 passed (868)
+  Duration  6.68s
+```
+
+The pre-existing Vite warning `Duplicate key "regime"` in
+`server/test/mind.confluence.test.ts` still prints; it is not a failure.
+
+```text
+npx playwright test qa/footprint.spec.ts
+5 passed, 1 skipped (7.8s)
+```
+
+The skip is the desktop-only 1920 wide-screen evidence test on mobile. Mock RSS
+`MOCK MODE` blocks still print as expected.
+
+### XXVIII.3 Honest gaps after this Part
+
+- **Live mode has no automated browser test.** The 12-candle live result above is a
+  manual Playwright run against the real dev stack, not a checked-in spec. A spec that
+  mocks Binance would need route fixtures for `aggTrades` id pages.
+- **Initial live load is heavier.** A 12-candle BTC window can download roughly 160-170k
+  trades (about 4-5 s and 167 requests). It is capped at 220k; on an extremely active
+  window the oldest requested candle may be truncated rather than invented.
+- **If Binance is blocked, only the live tape remains.** The canvas shows the error /
+  no-trades state; it does not synthesize footprint rows from OHLC candles.
+- **`Load older` is capped by the same 220k budget.** Once the cap is reached the control
+  disables instead of silently dropping data.
+- **No full combined Playwright suite rerun.** The unrelated `qa/charts.spec.ts` drawing
+  flake and the Vite-cache race described in Part XXVII are unchanged.
+- **No commit created.** Working tree remains uncommitted.
+
+### XXVIII.4 Resume state
+
+- **Last updated:** 30 Oct 2026.
+- **Current part:** XXVIII. Supersedes XXVII.4's "Next" for the live sparse-chart issue.
+- **Unit tests:** 868 passed (41 files).
+- **Build:** 124 modules; CSS `196.11 kB` (`35.33 kB` gzip); JS `811.24 kB`
+  (`241.40 kB` gzip).
+- **Browser:** Footprint `5 passed, 1 skipped`; live manual check `12 candles` at
+  1366x768 and 1920x1080.
+- **Next:** if live regressions matter, add a route-fixture Playwright test for the
+  id-range backfill; otherwise the Footprint page is complete.
+
+---
+
+## Part XXIX - 30 Oct 2026: black Footprint canvas in Chrome
+
+### XXIX.1 What changed
+
+- User report: the Footprint toolbar and reading line were live and showed `12 candles`,
+  but the chart area below them was completely black.
+- Reproduced in installed Chrome 156 headless against the live dev server: the canvas
+  bitmap was fully transparent (`709,688 / 709,688` pixels alpha 0) while the toolbar
+  still said `12 candles · 25 USDT rows`. Bundled Chromium and Edge rendered the same
+  page. Headed Chrome rendered it. The failure was intermittent: 1 of 5 headless Chrome
+  runs produced the transparent bitmap.
+- Root cause: the resize effect sets `canvas.width` / `canvas.height`, which clears the
+  bitmap, and then queued a repaint through `requestAnimationFrame`. Chromium sometimes
+  drops that rAF after the resize, so the canvas stayed transparent and the host's
+  `#05070d` background showed as a black chart.
+- `FootprintCanvas` now paints synchronously immediately after every resize, instead of
+  relying only on the queued rAF. The rAF path still coalesces normal data redraws.
+- Added a 120 ms watchdog: if the queued rAF has not fired, it cancels the frame and
+  paints directly. This makes a dropped frame recover instead of leaving the chart blank.
+- Added `contextlost` / `contextrestored` handlers so a lost 2D context is repainted when
+  the browser restores it.
+
+### XXIX.2 Verification - what was actually run
+
+Before the fix, installed Chrome headless, five identical live loads:
+
+```text
+run 0: nonBg 216976, transparent 0
+run 1: nonBg 214185, transparent 0
+run 2: nonBg 221285, transparent 0
+run 3: nonBg 0, transparent 709688   <- black canvas, 12 candles in toolbar
+run 4: nonBg 221451, transparent 0
+```
+
+After the fix, five identical Chrome headless live loads:
+
+```text
+run 0: nonBg 221112, transparent 0
+run 1: nonBg 221342, transparent 0
+run 2: nonBg 221342, transparent 0
+run 3: nonBg  68863, transparent 0
+run 4: nonBg 220459, transparent 0
+```
+
+Run 3 was still loading more history, hence fewer painted pixels; it was not transparent.
+A Chrome screenshot after the fix shows the 12 live candles across the plot, the 25 USDT
+rows, B/S headers, summary strip, price axis and levels. Headed Chrome rendered the same
+page before and after the fix; the intermittent failure was headless/Chromium-specific
+timing, which is why it was easy to miss.
+
+```text
+npm run typecheck
+(no output, exit 0)
+
+npm run build
+124 modules transformed.
+dist/index.html                 3.05 kB | gzip:   1.43 kB
+dist/assets/index-C9ku1Pv-.css 196.11 kB | gzip:  35.33 kB
+dist/assets/index-DVFyFktD.js  811.63 kB | gzip: 241.52 kB
+built in 3.53s
+
+npm run verify
+Test Files  41 passed (41)
+     Tests  868 passed (868)
+  Duration  7.50s
+```
+
+The user's live dev server was running on :5173/:8787 during this work and was not
+stopped. The checked-in `qa/footprint.spec.ts` was not rerun after the canvas change to
+avoid the shared Vite-cache race; it had passed `5 passed, 1 skipped` immediately before
+the canvas fix. The live Chrome reproduction above is the evidence for this fix.
+
+### XXIX.3 Honest gaps after this Part
+
+- **No checked-in regression test for the dropped-rAF case.** The failure is a browser
+  timing race; a deterministic test would need a page hook that suppresses one rAF.
+- **Canvas context loss is handled but not simulated.** The handlers are defensive.
+- **The user's exact Chrome version/settings were not inspected.** The same transparent
+  bitmap was reproduced in Chrome 156 headless, which is sufficient to explain the
+  symptom, but the user's hardware/GPU path was not queried.
+- **No full Playwright suite rerun.** The unrelated `qa/charts.spec.ts` flake and the
+  Vite-cache race remain as documented in Part XXVII.
+- **No commit created.** Working tree remains uncommitted.
+
+### XXIX.4 Resume state
+
+- **Last updated:** 30 Oct 2026.
+- **Current part:** XXIX. Supersedes XXVIII.4's "Next" for the black-canvas symptom.
+- **Unit tests:** 868 passed (41 files).
+- **Build:** 124 modules; CSS `196.11 kB` (`35.33 kB` gzip); JS `811.63 kB`
+  (`241.52 kB` gzip).
+- **Browser:** Chrome 156 headless 5/5 non-transparent after the fix; Chrome screenshot
+  shows 12 live candles. Footprint spec `5 passed, 1 skipped` before this canvas change.
+- **Next:** if the black canvas ever reappears, capture the canvas `getImageData` alpha
+  count and the browser version; the watchdog should make it self-heal within 120 ms.
+
+---
+
+## Part XXX - 31 Oct 2026: Heatmap bubble line regression and reference shell completion
+
+### XXX.1 What changed
+
+- User report: heatmap trade circles were still rendered as one connected line. Two
+  independent causes were found and fixed:
+  - `bubblePoints()` step mode had been changed to key bins by time only and use a VWAP
+    price, so every 20-second step produced exactly one bubble. The key is restored to
+    `timeBin:priceBin` with `Math.max(100, rows)` price buckets, so distinct prices in the
+    same time step stay separate. Added a regression test that puts two prices in one time
+    step and expects two points.
+  - `HeatmapCanvas` drew a white polyline through every bubble centre, literally joining
+    the circles into one line. That path was removed; bubbles now render independently.
+- Mock large prints were also exactly 20 seconds apart on the price path. They now use
+  deterministic `+/-18s` time jitter and `+/-120` price-step offset, so Auto mode shows
+  clusters rather than a single V chain. The deterministic seed, small-print tail, walls,
+  pulls and add lifecycle are unchanged.
+- `bubbleRadius()` base restored from 5px to 6px so the existing `large > small` unit test
+  passes; the 64px diameter cap and the smaller 1.35 slope are unchanged.
+- The reference view bar is restored for Heatmap: 11 view tabs plus `?`, candle delta /
+  CVD / POC stats, fullscreen, and the mobile `Trading view` selector. `qa/terminal.spec.ts`
+  now asserts the restored view bar/tabs/help and skips desktop-only assertions on mobile.
+- Earlier heatmap reference work carried in the same pass: `bubbleFloor` default `10k`,
+  bubble cap 150, label threshold `$250K`, liquidity events `$150K` within 30s, wall labels
+  top 6 at 12px, `PULL_DROP_RATIO 0.8`, `PULL_SIMILAR_RATIO 0.25`, contrast floors
+  40/70/90 with logarithmic sparse intensity, auto step `span/45`, VWAP aggregation,
+  plan/user line styles, wall/pull/add labels, tooltip at 340px / 12px mono, axis/tag
+  fonts at 12px, current-price line across columns, hover adds, wheel price zoom and
+  right-click level menu.
+- Shell/readout work carried in the same pass: removed the extra Lines toggle and `l`
+  shortcut, removed the chart-status/state-chip/dot, moved stats into the view bar, filled
+  green LIVE badge with lag/messages/book-resync/reconnect diagnostics, two-line reading
+  line, rail `WAIT` unless feed is LIVE, collapsed rail is only the open button plus signal,
+  and raised topbar/toolbar/readout fonts to 11-12px. `DepthColumns` headers/tape fonts were
+  raised and delta text left-aligned.
+- This Part supersedes XXIV.18's "Heatmap page is standalone only" and XXIV.15's single
+  bubble chain. Earlier Parts are left in place; this Part wins.
+
+### XXX.2 Verification - what was actually run
+
+```text
+npm run verify
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  12.49s
+```
+
+The run still prints the pre-existing Vite/esbuild `Duplicate key "regime"` warning from
+`server/test/mind.confluence.test.ts`; it is not a failure.
+
+```text
+npm run build
+124 modules transformed.
+dist/index.html                 3.05 kB | gzip:   1.43 kB
+dist/assets/index-Djbc4NBq.css 196.29 kB | gzip:  35.39 kB
+dist/assets/index-DmMVL9vv.js  812.12 kB | gzip: 241.79 kB
+built in 8.06s
+```
+
+Vite warns that the JS chunk is above 500 kB; non-blocking.
+
+```text
+npx playwright test qa/heatmap.spec.ts qa/terminal.spec.ts
+5 passed, 3 skipped (32.9s)
+```
+
+The three skips are the device-specific halves: mobile-only heatmap composition on
+desktop, desktop-only heatmap composition on mobile, and desktop-only terminal shell
+assertions on mobile. The mock server logged its expected `MOCK MODE` RSS blocks
+(Bitcoin Magazine, Bitcoin.com, CryptoSlate); no outbound request was allowed.
+
+Screenshot inspected: `qa/screens/heatmap-01-rework.png`. The white connector through the
+bubbles is gone, the bubbles form scattered clusters instead of one joined line, the six
+wall labels are visible in the right margin, and the restored view bar/stats are present.
+The same run regenerated `qa/screens/heatmap-02-mobile.png`.
+
+### XXX.3 Honest gaps after this Part
+
+- **No live-stack run.** `npm run verify:truth` and `npm run verify:stage1` were not run;
+  browser checks used the fixture server.
+- **Pixel parity is visual, not machine-verified.** The screenshot was inspected; there is
+  no image-diff assertion.
+- **Mock stats are not the reference's exact numbers.** The inspected run showed
+  `15M candle delta 100.10 BTC`, `CVD +$8.3M`, `POC 80,501.35`; the reference examples are
+  `+1.20 BTC`, `+$8.7M`, `80,557.76`. The mock composition is internally consistent but not
+  numerically identical.
+- **Full Playwright suite was not rerun.** Only heatmap and terminal specs were run. The
+  unrelated chart-drawing flake and the Vite-cache race documented in XXVII remain.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXX.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXX. Supersedes XXIV.18 for the Heatmap view bar and XXIV.15 for bubble
+  aggregation.
+- **Unit tests:** 869 passed (41 files).
+- **Build:** 124 modules; CSS `196.29 kB` (`35.39 kB` gzip); JS `812.12 kB`
+  (`241.79 kB` gzip).
+- **Browser:** heatmap + terminal `5 passed, 3 skipped`; desktop and mobile screenshots
+  regenerated.
+- **Next:** if the reference's exact candle/CVD/POC values matter, tune the mock small-print
+  quantities deliberately and re-run `npm run verify` plus the heatmap spec; otherwise the
+  Heatmap reference shell is complete.
+
+---
+
+## Part XXXI - 31 Oct 2026: Standalone Heatmap/Footprint pages and Footprint first-load gate
+
+### XXXI.1 What changed
+
+- User asked to separate Heatmap and Footprint into their own pages and remove the nested
+  terminal view tabs: `Chart`, `Heatmap`, `Footprint`, `Whales`, `Vol profile`, `Gamma`,
+  `Tape`, `L3 events`, `Futures`, `Sentiment`, `Guide`, `?`.
+- `TerminalView` now renders from its `view` prop only. Removed `VIEWS`, `ViewKey`,
+  `activeView`, the tablist, the mobile `Trading view` select, the guide button and the
+  `1`-`0` view hotkeys. The candle/CVD/POC stats strip and fullscreen button remain, so the
+  viewbar is now a status strip rather than a page switcher.
+- Removed the now-unreachable secondary view branches and their imports. `TerminalViews.tsx`
+  stays parked and unimported, as it already was before this Part.
+- Footprint first-open fix: `useFootprintTrades` no longer exposes the partial live tape
+  while the historical window is loading. A new `loaded` flag starts `false` when live and
+  becomes `true` on success or error; `trades` returns `[]` while `enabled && !loaded`.
+  FootprintView's existing loading state now shows `Loading trade history...` instead of a
+  partial chart that looked like mock/fake data. Mock mode is unchanged and still renders
+  its fixture immediately.
+- `qa/terminal.spec.ts` now asserts zero `.tradfye-tab`, no tablist, no view select, and
+  adds a Footprint standalone test with a screenshot. `qa/heatmap.spec.ts` is unchanged.
+- This Part supersedes XXX.1's restored view bar. Part XXX is left in place as history.
+
+### XXXI.2 Verification - what was actually run
+
+```text
+npm run verify
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  11.23s
+```
+
+The run still prints the pre-existing Vite/esbuild `Duplicate key "regime"` warning from
+`server/test/mind.confluence.test.ts`; it is not a failure.
+
+```text
+npm run build
+123 modules transformed.
+dist/index.html                 3.05 kB | gzip:   1.43 kB
+dist/assets/index-Djbc4NBq.css 196.29 kB | gzip:  35.39 kB
+dist/assets/index-CS8OskJo.js  790.31 kB | gzip: 236.15 kB
+built in 3.80s
+```
+
+Vite warns that the JS chunk is above 500 kB; non-blocking. The module count fell from 124
+to 123 because the unreachable `TerminalViews` import is gone from the production graph.
+
+```text
+npx playwright test qa/terminal.spec.ts qa/heatmap.spec.ts
+6 passed, 4 skipped (35.5s)
+```
+
+The four skips are the same device-specific halves as before, plus the new Footprint test's
+mobile half. The mock server logged its expected `MOCK MODE` RSS blocks (Bitcoin Magazine,
+Bitcoin.com, CryptoSlate); no outbound request was allowed.
+
+Screenshots inspected: `qa/screens/heatmap-01-rework.png` and
+`qa/screens/footprint-01-standalone.png`. Both show the Tradfye shell with no view tabs;
+the heatmap canvas still fills its area, and the Footprint page shows the stats strip plus
+`Loading trade history...` rather than a partial chart.
+
+### XXXI.3 Honest gaps after this Part
+
+- **No live-stack run.** `npm run verify:truth` and `npm run verify:stage1` were not run.
+  The Footprint loading fix was observed against the fixture/offline server, not live Binance
+  aggTrades; there is no automated assertion that the live tape never flashes before backfill.
+- **The pages are still standalone Tradfye routes.** `App.tsx` still early-returns
+  `?tab=heatmap`/`?tab=footprint` into `.tradfye-standalone`; the OrderFlow global header and
+  navbar are not rendered on those routes. If "like Dashboard/Charts" meant the global
+  OrderFlow shell, that is not built.
+- **The viewbar is not completely gone.** It remains as a 40px status strip with the
+  candle/CVD/POC stats and fullscreen button, per the decision to preserve prior UI. If the
+  request meant removing that strip too, it is a one-line render removal plus test update.
+- **Pixel parity is visual, not machine-verified.** The screenshots were inspected; there is
+  no image-diff assertion.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXXI.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXI. Supersedes XXX.1 for the Heatmap/Footprint view bar and adds the
+  Footprint first-load gate.
+- **Unit tests:** 869 passed (41 files).
+- **Build:** 123 modules; CSS `196.29 kB` (`35.39 kB` gzip); JS `790.31 kB`
+  (`236.15 kB` gzip).
+- **Browser:** heatmap + terminal `6 passed, 4 skipped`; heatmap and Footprint screenshots
+  regenerated.
+- **Next:** if the user wants the global OrderFlow navbar on Heatmap/Footprint, replace the
+  `App.tsx` early return with an embedded shell; if they want the status strip gone too,
+  remove the remaining `.tradfye-viewbar` block and assert it is absent.
+
+---
+
+## Part XXXII - 31 Oct 2026: Heatmap/Footprint embedded below the app navigation
+
+### XXXII.1 What changed
+
+- User reported Heatmap and Footprint still opened full-screen and hid the OrderFlow
+  navigation. They wanted both below the normal navigation bar, like Charts.
+- Removed `App.tsx`'s early return for `?tab=heatmap` and `?tab=footprint`. Both now render
+  inside the normal `<main>`, below `.app-header`, `.app-navbar`, the mock/banned banner and
+  the macro strip. The terminal is wrapped in `h-full min-h-0` so `.tradfye-shell` fills the
+  content area instead of `100svh`.
+- Kept the Tradfye brand/topbar, stats strip, and the terminal's own `DecisionRail`. The
+  app-level `DecisionRail` is not rendered on these two tabs, so there is no duplicate rail.
+  The `p` shortcut in `App.tsx` now skips both terminal tabs; `TerminalView` owns `p` there.
+- No terminal CSS or canvas changes. Charts, Dashboard, and every other page are untouched.
+- `qa/terminal.spec.ts` now asserts the app nav is visible, the correct app tab is active,
+  and the terminal shell's top is below `.app-navbar`. The Footprint layout test uses
+  `?mock=1` so the layout check does not trigger the live aggTrades backfill.
+- `qa/footprint.spec.ts` no longer looks for the removed inner tab/select; it asserts the
+  global Footprint nav tab is active.
+- This Part supersedes XXXI.3's "pages remain standalone" gap. Part XXXI's removal of the
+  inner view tabs and Footprint loading gate remains in force.
+
+### XXXII.2 Verification - what was actually run
+
+```text
+npm run verify
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  11.33s
+```
+
+The pre-existing Vite/esbuild `Duplicate key "regime"` warning from
+`server/test/mind.confluence.test.ts` is still printed; it is not a failure.
+
+```text
+npm run build
+123 modules transformed.
+dist/index.html                 3.05 kB | gzip:   1.43 kB
+dist/assets/index-Djbc4NBq.css 196.29 kB | gzip:  35.39 kB
+dist/assets/index-DvnAfHup.js  790.33 kB | gzip: 236.14 kB
+built in 4.06s
+```
+
+Vite still warns that the JS chunk is above 500 kB; non-blocking.
+
+```text
+npx playwright test qa/heatmap.spec.ts qa/terminal.spec.ts qa/footprint.spec.ts
+11 passed, 5 skipped (1.1m)
+```
+
+The five skips are the device-specific halves. The run also printed `DEV GUARD` warnings
+for Binance `aggTrades` (121-158 REST calls in 60s) during the heatmap terminal's initial
+history fetch; the tests still passed. That is the pre-existing history-refresh pattern,
+not caused by the embedding.
+
+Screenshots inspected: `qa/screens/heatmap-01-rework.png`,
+`qa/screens/heatmap-02-mobile.png`, `qa/screens/footprint-01-mock-desktop.png`, and
+`qa/screens/footprint-02-wide.png`. Desktop shows the OrderFlow header/nav/macro strip,
+the active Heatmap/Footprint tab, and the terminal below it. Mobile shows the same stack;
+the extra chrome leaves less vertical room for the heatmap canvas, but there is no new
+horizontal overflow beyond the existing app nav.
+
+### XXXII.3 Honest gaps after this Part
+
+- **No live-stack run.** `npm run verify:truth` and `npm run verify:stage1` were not run.
+- **The `DEV GUARD` aggTrades warning remains.** The heatmap terminal's initial history fetch
+  can exceed 120 calls/60s before health reports MOCK. This Part did not change that fetch
+  path.
+- **Mobile vertical space is tight.** The global header/nav/macro plus the Tradfye brand and
+  topbar leave a short canvas. The page still fits and scrolls, but this was not separately
+  redesigned.
+- **Pixel parity is visual, not machine-verified.** The screenshots were inspected; there is
+  no image-diff assertion.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXXII.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXII. Supersedes XXXI.3's standalone-route gap; keeps XXXI's tab
+  removal and Footprint loading gate.
+- **Unit tests:** 869 passed (41 files).
+- **Build:** 123 modules; CSS `196.29 kB` (`35.39 kB` gzip); JS `790.33 kB`
+  (`236.14 kB` gzip).
+- **Browser:** heatmap + terminal + footprint `11 passed, 5 skipped`.
+- **Next:** if the user wants the app-level DecisionRail on Heatmap/Footprint instead of the
+  terminal rail, swap the rails deliberately; otherwise the pages now open below the normal
+  navigation bar.
+
+---
+
+## Part XXXIII - 31 Oct 2026: Footprint candle prices visible without moving the chart
+
+### XXXIII.1 What changed
+
+- User report: on the Footprint page the candle price only appeared after moving the chart
+  or pointer to a certain level; they wanted it visible immediately so the page is easier
+  to read.
+- The right-hand price axis and current-price pill were already always drawn. The missing
+  information was the candle's own OHLC: it existed only in the hover tooltip. The reading
+  line above the canvas showed delta, verdict, POC and imbalances but no candle price.
+- `readingFor()` in `src/terminal/footprint/FootprintView.tsx` now prepends the selected
+  candle's OHLC using the same `fpPrice()` formatter as the tooltip:
+  `This candle: O <open> H <high> L <low> C <close> - <delta> - <verdict>...`.
+  The selected candle defaults to the latest candle, and clicking a candle already selects
+  it, so the line follows the user's choice without panning or hovering.
+- No canvas, axis, layout, toolbar or interaction changes. The reading line's existing
+  `role="status"` and `aria-live="polite"` are unchanged.
+- `qa/footprint.spec.ts` now asserts the exact new reading string, including
+  `O 80300.00 H 80305.00 L 79990.00 C 80142.42` for the mock fixture.
+
+### XXXIII.2 Verification - what was actually run
+
+```text
+npm run verify
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  7.12s
+```
+
+The pre-existing Vite/esbuild `Duplicate key "regime"` warning from
+`server/test/mind.confluence.test.ts` is still printed; it is not a failure.
+
+```text
+npm run build
+123 modules transformed.
+dist/index.html                 3.05 kB | gzip:   1.43 kB
+dist/assets/index-Djbc4NBq.css 196.29 kB | gzip:  35.39 kB
+dist/assets/index-DfbaFE0d.js  790.38 kB | gzip: 236.17 kB
+built in 2.37s
+```
+
+Vite still warns that the JS chunk is above 500 kB; non-blocking.
+
+```text
+npx playwright test qa/footprint.spec.ts qa/terminal.spec.ts qa/heatmap.spec.ts
+11 passed, 5 skipped (16.5s)
+```
+
+The five skips are the device-specific halves. The run printed the known
+`DEV GUARD` Binance `aggTrades` warnings (121-134 REST calls in 60s) during the heatmap
+terminal's initial history fetch; the tests still passed. The inspected
+`qa/screens/footprint-01-mock-desktop.png` shows the reading line with OHLC and the chart
+with its price axis.
+
+### XXXIII.3 Honest gaps after this Part
+
+- **The request was ambiguous.** "Candle price" was implemented as the selected candle's
+  OHLC readout, because the price axis labels were already permanently visible and the
+  tooltip was the only place candle prices appeared. If the user meant a different element
+  (for example a price tag for every candle), that is not built.
+- **Only the selected/latest candle is shown.** The line does not list OHLC for every
+  visible candle; that would add substantial text to a one-line status strip.
+- **Desktop reading line can ellipsize.** `.fp-reading` is nowrap with ellipsis on desktop;
+  OHLC is at the start so it stays visible, but the trailing imbalance sentence may truncate
+  at narrow widths. Mobile already wraps.
+- **No live-stack run.** `npm run verify:truth` and `npm run verify:stage1` were not run;
+  the browser check used the fixture server.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXXIII.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXIII. Supersedes the Footprint reading-line description in earlier
+  Parts; Parts XXXI-XXXII remain in force.
+- **Unit tests:** 869 passed (41 files).
+- **Build:** 123 modules; CSS `196.29 kB` (`35.39 kB` gzip); JS `790.38 kB`
+  (`236.17 kB` gzip).
+- **Browser:** heatmap + terminal + footprint `11 passed, 5 skipped`.
+- **Next:** if the user wants every candle's price printed on the chart rather than the
+  selected candle's OHLC in the reading line, add it as an opt-in setting rather than
+  changing the default layout.
+
+---
+
+## Part XXXIV - 31 Oct 2026: Every Footprint candle prints its own OHLC
+
+### XXXIV.1 What changed
+
+- User report: on the Footprint page the candle price only showed after moving the chart to a
+  certain position; they wanted it visible immediately so the page is easier to read.
+- The request was clarified with one question before touching code. The chosen answer was
+  **every candle's OHLC price, on the chart, without panning or hovering**. This supersedes the
+  Part XXXIII answer (selected candle's OHLC in the reading line), which only covered one candle.
+- **Follow-up after the first pass:** the labels were rendering, but at 9 px with no separation
+  they merged into one faint line of numbers; the user could only read them after zooming until
+  one bar remained. The band was therefore made a readable, visually separated per-column row.
+- `src/terminal/footprint/FootprintCanvas.tsx` now draws two lines per visible column in a
+  28 px band under the B/S header:
+  `O <open> H <high>` and `L <low> C <close>`.
+  The values come from `column.candle.o/h/l/c`; nothing is derived or estimated.
+- Each column's block is filled with a subtle well (`rgba(255,255,255,0.04)`, inset 1 px) so
+  neighbouring columns read as separate cards instead of one continuous wall of text. The O/H
+  line is `#b6bdc9`, the L/C line is `#e6e9ef`. A faint divider separates B/S from OHLC and a
+  stronger one closes the band above the plot.
+- The band is `FOOTPRINT.PRICE_HEADER_H = 28` (`src/terminal/footprint/settings.ts`), appended
+  below the existing 30 px B/S header, so the B/S lines stay at exactly their old offsets
+  (`infoH + 11` / `infoH + 25`). With B/S hidden the band still renders, so the OHLC readout
+  never disappears.
+- Formatting: `fpPrice()` (2 decimals for BTC-scale prices) when the column is at least
+  `FOOTPRINT.PRICE_LABEL_NARROW = 104` px wide; narrower columns drop decimals to fit and use a
+  compact form with no space after the letters (`O80451.1 H80504.1` / `L77616.0 C80515.2`), so
+  two labels still fit inside an ~80 px mobile column. The font starts at
+  `PRICE_LABEL_FONT = 10.5` px and is scaled down to the column pitch (floor
+  `PRICE_LABEL_MIN_FONT = 7` px) using `measureText`.
+- `resolveAutoRowSize()` still receives the plot height **before** the new band
+  (`plotBottom - (INFO_H + buySellH)`), so the band cannot change which footprint rows get
+  merged. Only the display height shrinks; the data resolution stays exactly as it was.
+- No other renderer behaviour changed: price axis, live-price tag, current-price line, summary
+  strip, levels, annotations, rekt markers, hover tooltip, hit-testing and pan/zoom are
+  untouched. The reading line added in Part XXXIII still shows the selected candle's full OHLC.
+- `CONTEXT.md` section 12.7 records the readout gap as bug 53.
+
+### XXXIV.2 Verification - what was actually run
+
+The user initially forbade testing, then allowed a check in my own interface provided their
+manual IP was never touched. The check below used **only the already-running local Vite server
+on :5173** (started by the user, not restarted) and a headless Chromium context that **aborted
+every request whose host was not localhost / 127.0.0.1 / ::1**. No external host was contacted;
+the Binance WebSocket attempts in the console were aborted by that route rule and failed with
+`ERR_NAME_NOT_RESOLVED`, which is the guard working, not an app fault.
+
+```text
+url:      http://localhost:5173/?tab=footprint&mock=1
+viewport: 1600x1000, dpr 1
+canvas:   1536x768 CSS px
+toolbar:  12 candles - 25 USDT rows
+result:   every visible column drew its two OHLC lines in the new band
+page errors: none
+console:  local /api 503s only (API not needed for the mock footprint)
+evidence: C:\Users\DK\AppData\Local\Temp\opencode\fp-check.png
+          C:\Users\DK\AppData\Local\Temp\opencode\fp-canvas.png
+```
+
+The screenshot shows the 12-column mock with each column carrying `O ... H ...` / `L ... C ...`
+in its own well; the labels are no longer a single continuous line. This is a real render check,
+not an arithmetic one.
+
+Not run: `npm run verify`, `npm run build`, `npm run verify:truth`, `npm run verify:stage1`, or
+any live-data browser run. No build/test pass is claimed here.
+
+Layout with the final constants:
+
+- B/S on: info `0..20`; B/S text at `31` / `45`; separators at `49.5` / `77.5`; OHLC text at
+  `59` / `70`; plot starts at `78`.
+- B/S off: band `20..48`; OHLC text at `29` / `40`; plot starts at `48`.
+
+### XXXIV.3 Honest gaps after this Part
+
+- **Checked only at one size and on mock data.** The render check used 1600x1000 and the 12
+  fixture candles, not the user's live stack, not 1920/1366/390 widths and not a real symbol.
+- **Narrow columns lose decimals.** Below 104 px the label rounds (`>= 100` -> 1 decimal,
+  `>= 1` -> 2, `>= 0.01` -> 4, else 6). Full precision remains in the reading line, the price
+  axis and the hover tooltip. Very narrow columns can still hit the 7 px font floor.
+- **Partially visible columns can have clipped labels.** The band is clipped by the canvas edge
+  and by the price axis, which is drawn after it. This affects only the first/last column when
+  it is half off-screen.
+- **The chart lost 28 px of plot height** (the band is real space, not an overlay). The summary
+  strip, axis and all existing elements keep their own sizes.
+- **The production `dist/` was stale at the time of this check.** It was built at 12:13 before
+  this part. The :5173 dev page had the new code; the API-served build on :8787 did not. This
+  was the actual cause of the user's "no prices on load" report. Superseded by XXXIV.5: the
+  production bundle was rebuilt and checked.
+- **No live-stack run.** `npm run verify:truth` and `npm run verify:stage1` were not run.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXXIV.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXIV. Supersedes Part XXXIII's "Next" note and its selected-candle-only
+  answer; the Part XXXIII reading-line change remains in place. Parts XXXI-XXXII remain in
+  force.
+- **Unit tests:** not run this pass. Last recorded run, from Part XXXIII: 869 passed (41 files).
+- **Build:** not run this pass. Last recorded build, from Part XXXIII: 123 modules; CSS
+  `196.29 kB` (`35.39 kB` gzip); JS `790.38 kB` (`236.17 kB` gzip).
+- **Browser:** a targeted headless render check ran this pass (see XXXIV.2). The full Playwright
+  suite was not re-run; last recorded suite run, from Part XXXIII: heatmap + terminal +
+  footprint `11 passed, 5 skipped`.
+- **Next:** the user will test the Footprint page on :5173. If the band is too tall or too small,
+  change `FOOTPRINT.PRICE_HEADER_H` in `src/terminal/footprint/settings.ts`; if the text is too
+  small, change `PRICE_LABEL_FONT`. Do not hard-code new numbers in the canvas. Rebuild before
+  testing the API-served build on :8787.
+
+### XXXIV.5 Follow-up - 31 Oct 2026: the stale production build was the cause
+
+> Scope note added in XXXV: the stale bundle explained why the Part XXXIV OHLC band was absent
+> from the API-served page. It did **not** explain the separate observation that cell values
+> appeared only after a horizontal drag; that was a `rowH >= 10` gate in the renderer, fixed in
+> Part XXXV.
+
+The user reported again that on entering the Footprint section the chart loaded but printed no
+prices, and that dragging right made the prices appear. The report matches the **production
+bundle**: `dist/assets/index-D1pSWTQf.js` was still the 12:13:44 build, and a source grep found
+no Part XXXIV band in it (the two `  H ` hits were the hover tooltip). The API server on :8787
+serves `dist/`; the :5173 dev page already had the labels. So a browser on the API-served build
+could not show the band, and the OHLC readouts it did have were the Part XXXIII reading line
+and the hover tooltip.
+
+What was changed this pass:
+
+- `npm run build` was run. Final bundle:
+  `dist/assets/index-BSGvDB_T.js` **791.57 kB** (`236.57 kB` gzip), CSS
+  `dist/assets/index-Djbc4NBq.css` **196.29 kB** (`35.39 kB` gzip), 123 modules, built in
+  `1.90s`. `tsc --noEmit` passed as part of it. The earlier rebuild in the same pass produced
+  `index-BZxrzdFY.js`; the final hash includes the compact-label change below.
+- **Compact labels for narrow columns.** At 390 px the desktop text was touching its neighbours
+  even at the 7 px floor. Below `PRICE_LABEL_NARROW` the labels now omit the space after each
+  letter: `O80451.1 H80504.1` / `L77616.0 C80515.2`. Desktop keeps the spaced form. No other
+  element changed.
+- `npm run verify` was run: typecheck clean, **41 files, 869 tests passed**, `8.01s`. The only
+  output of note is a pre-existing Vite warning, not a failure: duplicate key `"regime"` in
+  `server/test/mind.confluence.test.ts:194`.
+
+Verification, with the real numbers:
+
+```text
+run A - dev source, own Vite on :5199, synthetic aggTrades, external hosts blocked
+  t300: 40 label fillText calls; first {"text":"O 80047.34 H 80100.30","x":-2,"y":59,"at":179}
+        last {"text":"L 80436.13 C 80463.69","x":1231,"y":70,"at":190}
+  t1500 / t4000: labels still drawn on every redraw; no drag needed
+  page errors: none
+
+run B - production bundle, `vite preview` on :5198, same synthetic aggTrades
+  desktop 1600x1000, t300: 40 calls; first {"text":"O 80047.34 H 80100.30","x":-2,"y":59,"at":277}
+        last {"text":"L 77616.00 C 77655.45","x":1231,"y":70,"at":294}
+  mobile 390x844, t300: 24 calls; first {"text":"O80451.1 H80504.1","x":16,"y":59,"at":169}
+        last {"text":"L77616.0 C80515.2","x":232,"y":70,"at":400}
+  after-drag on both: labels move with the columns; they do not appear only then
+  page errors: none
+
+evidence: C:\Users\DK\AppData\Local\Temp\opencode\live-t300.png
+          C:\Users\DK\AppData\Local\Temp\opencode\live-after-drag.png
+          C:\Users\DK\AppData\Local\Temp\opencode\mobile-t300.png
+          C:\Users\DK\AppData\Local\Temp\opencode\mobile-after-drag.png
+```
+
+Honest note on the measurement: the first mobile run logged `0` label calls because the
+instrumentation regex required a space after the leading letter and the new compact form has
+none. The regex was corrected and the mobile run repeated; the `24 calls` above are from the
+corrected run. The zero was a harness bug, not an app bug.
+
+Network/IP guard: Chromium was launched with
+`--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost`; every non-localhost route was
+aborted. The single external URL fulfilled was
+`https://data-api.binance.vision/api/v3/aggTrades`, answered with synthetic JSON from memory.
+No DNS lookup and no TCP connection to Binance was made, and no network setting was changed.
+The API server on :8787 was **not** started, because it would connect to Binance with the user's
+public IP. The production bundle was checked through `vite preview` instead.
+
+Cleanup: the temporary Vite servers on :5198 and :5199 were stopped; both ports report free.
+
+Remaining gaps:
+
+- Only 1600x1000 and 390x844 were checked. 1366/1920 were not.
+- Partially visible first/last columns still have clipped labels at the canvas edge.
+- The full Playwright suite was not re-run; `qa/footprint.spec.ts` still asserts only the
+  Part XXXIII reading line and has no assertion for the OHLC band.
+- `npm run verify:truth` and `npm run verify:stage1` were not run; they need a live stack.
+- The browser may still hold the old hashed bundle / `index.html` cache. A restart of the
+  :8787 server and a hard refresh are required to see the rebuild there.
+- No commit was created.
+
+Resume state after this follow-up: **tests 869 passed (41 files)**, **build green at
+`index-BSGvDB_T.js` 791.57 kB**, **targeted browser checks green at 1600 and 390 on the
+production bundle**. The next session should not rebuild again unless source changes; it should
+test the API-served build on :8787 with the rebuilt `dist`.
+
+## Part XXXV - 31 Oct 2026: Footprint cell values render before the first drag
+
+### XXXV.1 The second layer XXXIV.5 missed
+
+Report: entering Footprint, the cells inside the candles printed no bid/ask numbers; dragging
+the chart horizontally made them appear. Part XXXIV.5 concluded the complaint was the stale
+production bundle. That was real for the OHLC band, but it was not the whole cause: the
+**cell values** were still gated in the renderer itself.
+
+The reproduction used the current dev source on :5173, live Binance data and a Playwright
+`addInitScript` wrapping `CanvasRenderingContext2D.prototype.clearRect/fillText`. The initial
+frame drew **0 numeric cell texts**; panning the same chart then produced the values. The data
+had been there the whole time.
+
+Root cause in `src/terminal/footprint/FootprintCanvas.tsx`:
+
+- `rowH` is viewport-derived: `plotH / (ceil((high - low) / rowSize) + 8)`, clamped `5..46`,
+  then multiplied by `view.zoomY`.
+- All four cell renderers (`drawBidAsk`, `drawDelta`, `drawVolume`, `drawDeltaVolume`) wrapped
+  their text in `if (rowH >= 10)`, and each `fillText` also required `clippedH > 7`.
+- On the initial live range the visible price span was 304 px, giving `rowH = 8.8`. Every
+  value was suppressed. In the reported repro, panning narrowed the visible span to 254 px,
+  giving `rowH = 10.3`; the same cells then crossed the threshold and appeared.
+
+Visibility of market data was coupled to a viewport measurement. That is the bug. The earlier
+"stale bundle" explanation was a real deployment problem but an incomplete diagnosis; this
+part supersedes it as the cause of the missing cell numbers.
+
+### XXXV.2 What changed
+
+Only `src/terminal/footprint/FootprintCanvas.tsx` changed. No colours, bar lengths, column
+geometry, row pitch, data aggregation or toolbar behaviour changed.
+
+- Added `cellFontSize(rowH, large, medium)`: `>= 18` -> large, `>= 13` -> medium, `>= 8` -> 9,
+  otherwise `max(3, rowH)`. The first three branches are the exact font ladder that was inline
+  before (`11/10/9`, or `10/9` for delta+volume).
+- Added `cellTextFits(clippedH, font)`: `clippedH >= min(7, font * 0.75)`, preserving the old
+  7 px rule for normal rows and scaling it for small ones.
+- Added `fullyVisible = y >= plotTop && y + height <= plotBottom` and changed the per-cell fill
+  gate to `fullyVisible || cellTextFits(clippedH, font)`. A row that is wholly inside the plot
+  no longer loses its text to an edge test.
+- Changed the outer gate from `rowH >= 10` to `rowH >= 2`. Rows below 10 px now scale the type
+  down instead of disappearing.
+- `setFont` now uses the fitted size: `cellFontSize(rowH, 11, 10)` for bid/ask, delta and
+  volume; `cellFontSize(rowH, 10, 9)` for delta+volume.
+
+At the normal 10x-merged pitch the output is byte-for-byte the previous 9 px text; only rows
+that previously rendered nothing now render smaller text. The Part XXXIV OHLC band is
+untouched.
+
+### XXXV.3 Verification with real output
+
+```text
+npm run verify
+  41 test files passed, 869 tests passed, 7.15s
+  tsc --noEmit clean
+  only pre-existing warning: duplicate key "regime" in server/test/mind.confluence.test.ts:194
+
+npm run build
+  123 modules transformed
+  dist/assets/index-Djbc4NBq.css  196.29 kB (35.39 kB gzip)
+  dist/assets/index-B4DRVoxQ.js   791.82 kB (236.72 kB gzip)
+  built in 1.66s; only the chunk-size warning
+```
+
+Fresh live browser re-check after the build, current dev source on :5173, 1600x1000, dpr 1,
+live Binance, same `fillText` instrumentation:
+
+```text
+initial {"toolbar":"12 candles · 5","from":"From Oct 31, 02:00 PM UTC","cells":325,"fonts":["9"],"minPitch":8.7}
+after-drag {"toolbar":"12 candles · 5","from":"From Oct 31, 02:00 PM UTC","cells":378,"fonts":["9"],"minPitch":8.7}
+page errors: none
+evidence: C:\Users\DK\AppData\Local\Temp\opencode\fp-final-initial.png
+          C:\Users\DK\AppData\Local\Temp\opencode\fp-final-after-drag.png
+```
+
+The initial frame is the point: 325 numeric cell labels at 9 px on an 8.7 px pitch, before any
+drag (the count is the instrumented window `y 75-660`, not the whole plot). Dragging only
+reveals more columns; it is no longer what makes the values exist.
+
+The repo's browser spec was also run against the already-running :5173 dev server with a
+temporary config (no second Vite, so the shared `node_modules/.vite` cache was not touched):
+
+```text
+npx playwright test --config <temporary reuse config>
+  3 passed (3.1s)
+  footprint mock renders the required composition and reading line
+  footprint shows the full 12-candle composition on a wide screen
+  footprint loads older candles and shows the row tooltip
+```
+
+Earlier in the same pass, the live matrix (also 1600x1000 unless stated) covered: initial load,
+refresh, Charts -> Footprint, timeframes `1m/5m/15m/1h/4h/1D`, Rows `1x/2x/5x/10x/Auto`,
+Units `BTC/$`, Load older (`47 candles`, `319` cells), resize to `1200x800` and back, wheel
+zoom, drag, double-click reset and 8 s of live updates. Every state drew cell values and the
+page reported no errors. The `1x` state drew at a 2.2 px pitch with a 3 px font (see gaps).
+
+### XXXV.4 Honest gaps after this Part
+
+- **The QA spec is mock-only and asserts no canvas pixels.** It passes, but it would not have
+  caught this bug; the initial-load cell count came from the live instrumentation above, which
+  is not committed. A regression test for the no-drag first frame is still unbuilt.
+- **Dense rows are drawn, not necessarily readable.** At Rows `1x` the fitted font reaches
+  3 px. That is the chosen fallback instead of blank cells; making 1x readable needs a row-size
+  or zoom decision, not another visibility gate.
+- **Partially visible top/bottom rows can still suppress text** when their clipped height is
+  below the fitted threshold. That is intentional: a half-row does not get a full label.
+- **Cell text was checked at 1600x1000 and 1200x800**, not at 1920, 1366 or 390. The existing
+  responsive screenshots cover layout, not the cell text.
+- **`npm run verify:truth` and `npm run verify:stage1` were not run.** They need a live stack;
+  the browser check used the already-running dev server, not those scripts.
+- **`dist` is rebuilt but the :8787 server may still hold the old bundle.** Restart the API
+  server and hard-refresh to see this fix on the API-served build.
+- **No commit was created.** The working tree remains uncommitted.
+
+### XXXV.5 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXV. Supersedes XXXIV.5's stale-bundle explanation for the missing cell
+  numbers. Parts XXXI-XXXIV remain in force for the OHLC band, the standalone/embedded shell
+  and the reading line.
+- **Unit tests:** `npm run verify` green this pass, **41 files / 869 tests**, 7.15s.
+- **Build:** green, **123 modules**, JS `index-B4DRVoxQ.js` 791.82 kB (236.72 kB gzip), CSS
+  `index-Djbc4NBq.css` 196.29 kB (35.39 kB gzip), 1.66s.
+- **Browser:** live initial load **325 cells at 9 px, min pitch 8.7**, after-drag **378 cells**,
+  no page errors; repo footprint spec **3 passed**.
+- **Next:** restart :8787 so it serves the rebuilt `dist`, then confirm on the API-served page
+  that the first frame carries values. If the user still sees a blank first frame, instrument
+  `fillText` again and record the frame; do not raise the old `rowH >= 10` gate. Consider
+  adding a first-frame cell assertion to `qa/footprint.spec.ts` using a synthetic aggTrades
+  route.
+
+---
+
+## Part XXXVI - 31 Oct 2026: Final Tradfye reference pass — view bar, price path, legend, stats
+
+### XXXVI.1 What changed
+
+This pass applies the remaining gaps in the final Tradfye reference prompt (view bar D, price
+path H3, legend H1, live-stat colours D, timeframe default C). Nothing outside the terminal was
+touched.
+
+- `src/terminal/TerminalView.tsx`:
+  - The 11-view tab bar is restored: `Chart | Heatmap | Footprint | Whales | Vol profile | Gamma |
+    Tape | L3 events | Futures | Sentiment | Guide` plus a round `?` button, each with the exact
+    spec title and key hint. Default active view is Heatmap. This supersedes Parts XXXI/XXXII's
+    "no nested tabs" and Part XXX's restored bar (which was removed again in XXXI).
+  - The builder `TerminalViews.tsx` views are wired back in: `TapeView`, `WhalesView`,
+    `VolumeProfileView`, `GammaView`, `L3EventsView`, `FuturesView`, `SentimentView`,
+    `GuideView`.
+  - Keyboard `1`–`0` switch tabs (`0` = Sentiment); `P`/`F`/`Escape` unchanged.
+  - Mobile: `<select aria-label="Trading view">` appears below 1024 px (new media query);
+    tabs hide. Previously this select only appeared below 760 px.
+  - Stats colours: candle Δ gets `.is-up`/`.is-down` (green/red by sign); POC gets new `.is-poc`
+    amber. Timeframe default changed `15m` → `5m` per spec C (affects the shared candle
+    timeframe, footprint mock anchor, and the stats label).
+- `src/terminal/HeatmapCanvas.tsx`:
+  - H3 price path: 1 px `rgba(255,255,255,0.30)` line joining consecutive step-bubble centers,
+    drawn under the bubbles (this replaces the old white connector-line bug fixed in Part XXX —
+    the new line only joins aggregated step bubbles, not every bubble).
+  - H1 legend text is now exactly spec-shaped: `<min> … <max>+ resting` (e.g. `$115.6K …
+    $654.2K+ resting`) and below it `<cadence> book columns · bubbles every Ns`, with cadence
+    per span (12m 0.5s, 1–5m 1s, 15m–1h 2s, 4h/1D 1m; MOCK stays 2s). The old "lighter
+    blue = thinner resting" line is gone.
+- `src/terminal/terminal.css`: `.terminal-view-stats b.is-poc` amber; `<1024px` select/tab
+  swap; `.terminal-simple` fills the view body when a secondary view is active.
+- `qa/terminal.spec.ts`: asserts 12 `.tradfye-tab` (11 + help), one tablist, Heatmap active by
+  default, hidden desktop select, and keyboard switching (`3` → Footprint, `0` → Sentiment,
+  `2` → Heatmap, `?` → Guide). `qa/footprint.spec.ts` now derives the expected `From` timestamp
+  from the mock's 5m anchor algorithm instead of hard-coding `08:45 AM UTC` (the anchor shifted
+  to `10:35` when the default timeframe became 5m).
+
+### XXXVI.2 Verification - what was actually run
+
+```text
+npm run verify
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  7.47s
+```
+
+The pre-existing Vite/esbuild `Duplicate key "regime"` warning from
+`server/test/mind.confluence.test.ts` still prints; it is not a failure.
+
+```text
+npm run build
+vite v6.4.4 building for production...
+✓ 124 modules transformed.
+dist/index.html                 3.05 kB │ gzip:   1.44 kB
+dist/assets/index-CCLb5GCb.css 196.54 kB │ gzip:  35.44 kB
+dist/assets/index-BoVO4CXO.js  814.19 kB │ gzip: 242.65 kB
+✓ built in 1.88s
+```
+
+Vite warns that the JS chunk is above 500 kB; non-blocking. (Module count is 124 again because
+`TerminalViews.tsx` is re-imported.)
+
+```text
+npx playwright test terminal.spec.ts footprint.spec.ts heatmap.spec.ts
+11 passed, 5 skipped (15.6s)
+```
+
+The five skips are the device-specific halves. The mock server logged its expected `MOCK MODE`
+RSS blocks and `DEV GUARD: binance aggTrades BTCUSDT ... (limit 120)` warnings; no test failed.
+
+### XXXVI.3 Honest gaps after this Part
+
+- **No live-stack run.** `npm run verify:truth` / `npm run verify:stage1` were not run; the
+  browser checks used the fixture server.
+- **Pixel parity is visual, not machine-verified.** No image-diff assertion exists.
+- **The user's dev stack was stopped for the Playwright run and restarted.** `npm run dev`
+  (API :8787 live, web :5173) is running again and was verified with `/api/health` and HTTP 200
+  on :5173.
+- **The `DEV GUARD` aggTrades warning remains** from the heatmap terminal's initial history
+  fetch; pre-existing, not caused by this pass.
+- **Full Playwright suite not rerun.** Only terminal/footprint/heatmap specs ran; the unrelated
+  `qa/charts.spec.ts` flake documented in earlier parts is unchanged.
+- **No commit created.** The working tree remains uncommitted.
+
+### XXXVI.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXVI. Supersedes XXXI/XXXII's "no nested view tabs" (the final reference
+  spec demands them) and keeps everything else.
+- **Unit tests:** 869 passed (41 files).
+- **Build:** 124 modules; CSS `index-CCLb5GCb.css` `196.54 kB` (`35.44 kB` gzip); JS
+  `index-BoVO4CXO.js` `814.19 kB` (`242.65 kB` gzip).
+- **Browser:** terminal + footprint + heatmap `11 passed, 5 skipped`.
+- **Next:** run a live-stack truth check if the live heatmap path needs validation; otherwise
+  the Tradfye reference heatmap shell is complete per the final prompt.
+
+---
+
+## Part XXXVII - 31 Oct 2026: Whales tab (new top-level view) lands
+
+### XXXVII.1 What changed
+
+This pass adds a standalone **Whales** tab to the main app navbar (not the terminal's inner
+view list). It renders a canvas visualization of whale trades, liquidations, plan levels, and
+gamma walls, fed by a mock/exchange feed with real Binance REST+WS wiring for live mode.
+
+- `src/App.tsx`: new tab id `'whales'`, label `Whales`, icon (whale/water/fin), slot after
+  `'footprint'` in `TAB_IDS` and nav; renders:
+
+  ```tsx
+  <div className="h-full min-h-0">
+    <WhalesView symbol={terminalSymbol} onSymbol={setTerminalSymbol} mode={mode} rows={allRows} />
+  </div>
+  ```
+
+- New `src/whales/` module (`WhalesView.tsx`, `draw.ts`, `engine.ts`, `feed.ts`, `layout.ts`,
+  `tokens.ts`, `format.ts`, `types.ts`, `whales.css`):
+  - **Feed** (`feed.ts`): `MockFeed` (deterministic per symbol/interval RNG, 95 min of bars +
+    seeded trades at `bigBlock` cadence) and `LiveFeed` (Binance REST history + WS
+    aggTrades/kline; `state` `'live' | 'stale' | 'off'`).
+  - **Engine** (`engine.ts`): `buildBubbles` (grouping by 15s blocks, `BUY`/`SELL`
+    classification, `whale` vs `everyone` tiers), `candleStatsFor`, `visiblePoc`,
+    `visiblePocLevel`, `whaleAverages`, `bubbleNet` (cumulative signed USD vs time),
+    `estimateLiquidationLevels` (mapped roughly to gex-style wall bands), `ema` (20/50).
+  - **Draw** (`draw.ts`): price panel (extreme/MC candles, last-price line, tagged user/
+    gamma/liq/plan levels with dashed/dotted styles and axis tags; off-screen liq/plan labels
+    pin as `▲/▼` chips at the panel edge), whale bubble histograms, volume B/S panel, net
+    area panel, time axis, crosshair with price/time readout, legend.
+  - **Viewport**: wheel zoom (native non-passive listener, `{ passive: false }`), time drag
+    panning, Shift+ drag price panning, double-click auto-range, full-span default
+    (~5.2 days), `90m`–`14d` clamp.
+  - **Terminal-consistency rules kept**: closed candles only for POC/net, `STALE` never
+    rendered as live, no invented numbers (`—`/dash when absent), LCD trade count + `[TUNED]`
+    liquidations mapping (manual estimate, not fitted).
+
+### XXXVII.2 Verification - what was actually run
+
+```text
+npm run typecheck      # clean, no errors
+npm run verify
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  7.74s
+
+npm run build
+vite v6.4.4 building for production...
+✓ 132 modules transformed.
+dist/index.html                 3.05 kB  gzip:  1.44 kB
+dist/assets/index-BVZ3xyTq.css 203.03 kB  gzip: 36.42 kB
+dist/assets/index-oEuyb7S1.js  858.80 kB  gzip: 257.64 kB
+✓ built in 2.38s
+```
+
+Vite's `>500 kB` JS-chunk warning is unchanged; non-blocking. The `node.exe` stderr line
+after the vite build is PowerShell's NativeCommandError echo of the exit code, not a failure.
+
+### XXXVII.3 Honest gaps after this Part
+
+- **No live-stack run.** `npm run verify:truth` / `verify:stage1` not executed; live path is
+  wired but unexercised.
+- **No Playwright spec for the Whales tab yet.** Browser behaviour (wheel zoom, drag-pan,
+  pinned liq labels, picker/popover) is verified only by construction, not by a test.
+- **`estimateLiquidationLevels` is `[TUNED]`** — a hand-mapped band estimate, not a fitted
+  model; labels say `[TUNED]` in the UI.
+- **The 4h/6h/1D timeframes** show multiple per-timeframe bars but the feed's candle history
+  covers 95 min per anchor; the full window is filled with hourly data (grandfathered gap for
+  timeframes above 1h).
+- **No commit created.** Working tree remains uncommitted.
+
+### XXXVII.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXVII. Supersedes nothing; adds the top-level Whales tab. The heatmap
+  terminal's inner Whales view (`src/terminal/TerminalViews.tsx`, Part XXXVI) is separate and
+  unchanged.
+- **Unit tests:** 869 passed (41 files).
+- **Build:** 132 modules; CSS `index-BVZ3xyTq.css` `203.03 kB` (`36.42 kB` gzip); JS
+  `index-oEuyb7S1.js` `858.80 kB` (`257.64 kB` gzip).
+- **Next:** write `qa/whales.spec.ts` (load tab, mock feed renders canvas, zoom changes span,
+  pinned liq chip exists) and run `verify:truth` against the live stack.
+
+
+---
+
+## Part XXXVIII - 31 Oct 2026: Whales view upgraded to the reference spec
+
+Supersedes most of Part XXXVII's Whales description; the tab mount, header chrome and the
+terminal-inner Whales view are unchanged. Everything below is the reference-spec pass
+(backfill + persistence, insight strip, dock, edge chips, band, tooltip lines, panel layout).
+
+### XXXVIII.1 What changed
+
+- `src/lib/binance.ts`: added `parseAggTrade`, `fetchAggTrades` (REST `/api/v3/aggTrades`,
+  paginated via `fromId`), `BinanceAggTrade`, optional `onAggTrade` stream handler and an
+  `{ aggTrade }` option on `subscribeMarketStream` so the live tape uses the **same id space**
+  as the REST backfill (dedupe by aggregate id).
+- `src/whales/backfill.ts` (new): `backfillTrades` (last `BACKFILL_MINUTES = 120`), `aggTradeToTerminal`
+  (id, timestamp, price, qty, usd, side from `m`, `count = lastId - firstId + 1`), `mergeTrades`
+  (id-sorted dedupe). Backfill is capped at the first page (1000 agg trades) per call.
+- `src/whales/persist.ts` (new): IndexedDB (`orderflow-whales` / `trades`, keyPath symbol) with
+  `loadTrades` / `saveTrades`; best-effort, never breaks the chart.
+- `src/whales/feed.ts`: `LiveFeed` now loads the persisted tape, backfills REST history, records
+  live via `@aggTrade`, merges (dedupe by id), persists on a 5 s throttle and on destroy. `T0`
+  = timestamp of the earliest recorded trade (persisted or backfilled). `tradeCountSinceT0`
+  sums per-aggregate raw `count`.
+- `src/whales/engine.ts`: `buildBubbles` is now a **per-candle aggregate** (bubble per candle,
+  VWAP price, buy/sell $ split, `prints` = same-side same-tick clusters inside the cluster
+  window, `count` = raw trade sum); radius = `24 * sqrt(notional / 1e6)` clamped `[4, 38]`px;
+  `whaleNet`, `countWhalePrints` helpers; `bubbleNet` unchanged shape.
+- `src/whales/tokens.ts`: spec palette (`t0` olive-gold, `crosshair` `#5b6470`, `lastPrice`
+  salmon-white, `tooltipYellow` `#e8c500`), default `WHALE_MIN = $50K`, cluster window 1 s,
+  `DEFAULT_CANDLES = 145`, `RIGHT_PAD_PX = 100`, time label every 10 candles.
+- `src/whales/layout.ts`: `TIME_H = 16`, price/volume/net � 62/14/13% of the remaining body,
+  full-height right gutter (`gutterTop/gutterH`), `axisTicks(min, max, 200)` fixed-nice-step.
+- `src/whales/draw.ts`: solid olive T0 line across the price panel only + gold
+  "no trades recorded before >"; off-screen level chips (?/? + ?/? icon, stacked 20 px, top
+  left / above the volume panel) vs in-range dotted/dashed lines with left-end labels and axis
+  tags; whale-average band (translucent olive, green/red dash-dot with phase offset, two stacked
+  left chips with blue whale icon + `(price �x.xx%)`); bubbles with pie split, hover white ring,
+  notional labels with dark outline, "whale buying/selling here" tags (imbalance = 0.35) with
+  white up-triangle, neighbour merging when zoomed out; last-price white box + dash-dot salmon
+  line; full-height bubbles/price gutter histogram (� red-left/green-right, 3 px rows); stacked
+  volume bars with 1 px gap; bubble-net panel with spec header text, baseline at the lower third,
+  per-candle bars, solid whale-cum line (green/red) and dashed cyan "everyone else" line, both
+  normalized to their own cumulative max; time labels every 2h30m at 15m; solid grey crosshair
+  across all panels.
+- `src/whales/WhalesView.tsx`: default view � 145 candles + 100 px right padding (span derived
+  from plot width), wheel/pan/double-click-reset clamped to `now + pad`; insight strip computed
+  from T0 window (price %, whale net, bubble count, phrase table, agree/disagree with the dock
+  lean, muted "Context, not a signal."); three stat chips moved into the header row; collapsible
+  right dock (44 px collapsed vertical WAIT/BUY LEAN/SELL LEAN, 320 px expanded with lean, net,
+  absorption, nearest levels); 4-line tooltip (2 normal + 2 yellow whale lines) placed left of
+  the crosshair near the right edge; legend toggles now include Volume panel and Insight strip;
+  Detect panel = WHALE_MIN, cluster window (s), side filter; view height pinned to the remaining
+  viewport (measured from `<main>`) so the whales page never scrolls.
+- `src/whales/whales.css`: insight strip, dock, header stats, reworked tooltip, removed the
+  superseded `.whales-chips` / `.whales-level-chip` overlays (stat chips now live in the header).
+- `qa/whales.spec.ts` (new): Playwright acceptance for the view: full-spec layout in a single
+  viewport (no page scroll), insight strip, dock (collapsed + expanded), legend/detect content.
+
+### XXXVIII.2 Verification - what was actually run
+
+```text
+npm run typecheck      # clean
+npm run verify         # typecheck + vitest
+Test Files  41 passed (41)
+     Tests  869 passed (869)
+  Duration  7.38s
+
+npm run build
+vite v6.4.4 building for production...
+? 134 modules transformed.
+dist/assets/index-cxG6ZrKq.css 205.32 kB  gzip: 36.78 kB
+dist/assets/index-ChHMjNNq.js  874.03 kB  gzip: 262.02 kB
+? built in 2.09s
+
+npx playwright test
+121 passed, 19 skipped (mobile-only skips), 0 failed - 4.1m
+  qa/whales.spec.ts: 2 passed (desktop) / 1 passed (mobile legend/detect)
+
+Engine probe (tsx, synthetic tape):
+  buildBubbles: per-candle, prints 2 (cluster window), count sums raw trades
+  radius: 1.5M -> 29.4px; 6.34M -> 38.0px (clamp, matches spec saturation)
+  axisTicks(76100, 78900, 200) = 76200..78800 every 200
+  mergeTrades dedupes on aggregate id (1,2,3)
+```
+
+### XXXVIII.3 Honest gaps after this Part
+
+- **No live-stack run.** `npm run verify:truth` / `verify:stage1` not executed; the live
+  backfill path is wired but this session exercised only the mock harness.
+- **Backfill pagination is capped** at one page (1000 agg trades) per mount by the `pageLimit`
+  guard; a full 120-minute backfill on a very active symbol may need more pages. Recorded as a
+  `[PROBED]`-style limit; wiring multi-page backfill is an open extension.
+- **App-shell document scroll is pre-existing** for every full-screen tab: the heatmap tab
+  measures `scrollHeight 1136` vs viewport `900` under the same harness. The whales view now
+  pins itself to the remaining viewport (`<main>` measurement) so **its** page does not scroll;
+  the sibling tabs were not changed.
+- **The DEV GUARD `aggTrades` rate-limit logs** during the Playwright suite come from the
+  server's existing data layer (`server/src/data/binance.ts:167`), not from the new frontend
+  backfill.
+- **No commit created.** Working tree remains uncommitted.
+
+### XXXVIII.4 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXVIII. Supersedes Part XXXVII's Whales description (the tab mount and the
+  terminal-inner Whales view `src/terminal/TerminalViews.tsx` are unchanged).
+- **Unit tests:** 869 passed (41 files). **Browser:** 121 passed / 19 skipped, 0 failed.
+- **Build:** 134 modules; CSS `index-cxG6ZrKq.css` `205.32 kB` (`36.78 kB` gzip); JS
+  `index-ChHMjNNq.js` `874.03 kB` (`262.02 kB` gzip).
+- **Next:** run a live-stack truth check (`verify:truth`) to exercise the REST backfill +
+  IndexedDB persistence against real Binance; extend `qa/whales.spec.ts` with wheel-zoom /
+  drag-pan / liq-chip assertions.
+
+---
+
+## Part XXXIX - 31 Oct 2026: Whales tab aligned to the live Tradfye terminal (shipped-bundle evidence)
+
+This pass is the "go to tradFye.com/terminal and make the whale page ditto" request. The live
+terminal is access-code gated, so the UI/UX/features were reverse-engineered from the shipped
+JS bundles (`index-pzuf11nj.js`, `trading-app-v2-DjOJZcng.js`, `dialog-Mb74Fqep.js`; saved for
+this session under the temp workspace). Every string below is quoted from that bundle.
+
+### XXXIX.1 What the shipped bundle proves (evidence)
+
+- **Bubble detection is mode-driven**: `Ai='whales.bubbles'`, `ji={mode:[sweep,aggressive,level,print], aggressor:[bidask,tick,combined], sizeBy:[total,aggressive], labelPos:[above,inside,below], placeAt:[vwap,first,last]}`. Sweep = "fast trades on one side grouped into one bubble � a market order taking out several price levels"; Aggressive = ask/bid buys while quotes hold; Level = volume at one price; Print = per trade.
+- **Whale size is auto**: `keepUsd = min(p99, 5000)` over the tape; the toolbar shows `sizing Auto�` until stats land; the Size select offers `Auto (top 0.5% of prints, capped $5K)` plus fixed tiers.
+- **Reading line (exact)**: `In view [since HH:MM]: price �% � whales net �$ (N bubbles) � <sentence> (<agrees|against the panel's buy/sell lean>) Context, not a signal.` Sentence table incl. flat cases: "whales are two-sided here � no clear big-player direction.", "whales buying with the rise � the move has big buyers behind it.", "whales selling into the rise � big players are taking profit or fading it.", "whales selling with the drop � the move has big sellers behind it.", "whales buying the dip � big buyers are absorbing the selling.", "price flat while whales buy � possible accumulation.", "price flat while whales sell � possible distribution." Agreement span turns amber when against.
+- **Toolbar**: Whale avg toggle ("Lines at the average price whales bought and sold at (in view)"), Zones toggle ("Bands where the most whale dollars traded (top 2 per side, in view)"), Vol profile toggle ("Volume by price for the candles on screen, in a strip at the right. POC = busiest price, stronger rows = 70% value area."), candle-length select with linked/unlinked shared-timeframe tooltip, and the in-view buy/sell readout.
+- **Help text**: the "Whales � big trade bubbles, on candles" explainer (modes), Whale avg/Zones, bottom bubble-net pane (dashed sky line = everyone else on its own scale, opposite-flag), right strip ("The strip at the right sums bubble buying / selling by price"), yellow/violet EMA 20/50.
+
+### XXXIX.2 What changed
+
+- `src/whales/types.ts`: settings re-modeled to the site's controls (`mode`, `aggressor`, `sizeBy`, `labelPos`, `placeAt`, `threshold: 'auto' | number`, `linkedTf`, `showAvg/showZones/showVolProfile` replacing `showBand/showHistogram`); `WhaleTapeStats`; snapshot gains `stats/keepUsd/fromTs/backfillError`.
+- `src/whales/engine.ts`: `tapeStats` (median/p99/p999); `buildBubbles` now takes mode/placeAt � sweep clusters (time window + ~0.2% price proximity), level groups per candle+tick, print per trade, anchor at vwap/first/last; `zoneBands` (top-2-per-side dollar bands).
+- `src/whales/feed.ts`: computes tape stats + effective auto floor, exposes `fromTs`, surfaces `backfillError`.
+- `src/whales/draw.ts`: `Zones` band overlay; right strip is now a true volume profile (candle volume by price, POC row outline, 70% value-area tint) with bubble buy/sell overlay; toggle wiring renamed.
+- `src/whales/WhalesView.tsx`: reading line rewritten to the shipped copy (in-view metrics, agreement vs the dock lean, amber when against); toolbar adds Whale avg / Zones / Vol profile / Help; timeframe buttons carry the linked/unlinked tooltip + a link chip; readout span (`sizing Auto� � buy $X / sell $Y`); Detect panel now mirrors the site's Mode/Size=/Aggressor/Size by/Label/Bubble at/Sweep window/Side filter; loading state ("Loading candles and whale trades�" / "No candles yet"); standard popover with the bundle's explainer text.
+- `src/whales/whales.css`: styles for readout, link chip, amber agreement, loading overlay, help popover.
+- `qa/whales.spec.ts`: asserts reading line, new toggles, legend entries, Detect controls, Help content.
+
+### XXXIX.3 Verification - what was actually run
+
+```text
+npm run typecheck      # clean
+npm run verify         # 41 files / 869 tests passed
+npm run build          # index-2b_yaC0z.js (885,422 B) / index-DggC0IPQ.css (206,202 B)
+npx playwright test qa/whales.spec.ts qa/terminal.spec.ts qa/search.spec.ts --project=desktop
+  11 passed (17.0s)  [full-suite run was aborted by the user mid-suite]
+
+Engine probe (tsx):
+  sweep: trades 1+2 merged ($2.00M @77625), 3 separate; sell cluster $3.00M; buy $0.50M
+  print: 5 bubbles;  level: candleA tick 77624.5 -> $4.10M, candleB 77618 -> $6.50M
+  tapeStats(6 trades): median 800k, p99 1.2M
+  zoneBands: buy 77624-77625 $2.90M | buy 77618 $0.50M | sell 77618 $3.00M
+```
+
+### XXXIX.4 Honest gaps after this Part
+
+- **Documented approximations**: (1) on a taker-only spot tape, `bidask`/`tick` aggressor classifiers resolve to the same side � noted in the Detect panel and code; (2) `sizeBy aggressive` equals `total` until maker/taker split data is available; (3) the shared-timeframe link is local to the Whales tab (other views do not subscribe to it yet); (4) Zones use the same price-bin runs as the volume profile, not the site's exact clustering.
+- **No live-stack run** (`verify:truth` / `verify:stage1`) � live backfill and IndexedDB persistence still only exercised in the mock harness.
+- **Access-gated site**: the terminal shell itself could not be opened (private beta); reconstruction is from the shipped bundles and is therefore evidence-based but not a pixel-identical screenshot copy.
+- **No commit created.** Working tree remains uncommitted.
+
+### XXXIX.5 Resume state
+
+- **Last updated:** 31 Oct 2026.
+- **Current part:** XXXIX. Supersedes XXXVIII's toggle/readout/reading-line details; the tank structural layout and dock from XXXVIII remain.
+- **Unit tests:** 869 passed (41 files). **Browser:** whales/terminal/search desktop 11 passed; full-suite run aborted by user.
+- **Next:** run the full `npx playwright test` (all projects) to completion; then a live-stack truth check.
+
+---
+
+## Part XL - 31 Oct 2026: Whales visual alignment to the reference chrome
+
+Follow-up on the "the UI is not like the reference website" feedback. The shipped-bundle
+extraction was deepened to the exact component markup, and the view chrome was rebuilt to match.
+
+### XL.1 Evidence from the bundle (exact markup)
+
+- Toolbar row: `chart-toolbar flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-3 py-1 text-[11px] text-muted-foreground`; children in order: `Detect` select, `Size =` select, candle-length select + `Bs` link button (`?`; sky-300 when linked, `line-through` muted when unlinked), mono readout (`sizing Auto� � buy $X / sell $Y`), `dh` pill toggles (`?`/`?` glyph; `bg-muted` when on), `? Settings` popover, `?` help trigger.
+- Reading bar: `chart-reading min-h-[calc(2lh+0.5rem+1px)] shrink-0 border-b border-border px-3 py-1 text-[11px] leading-snug text-muted-foreground` � two lines tall.
+- Canvas: `aria-label="Large trades and inferred grouped prints by price"`, `block h-full w-full cursor-crosshair select-none outline-none`.
+- Page background `Kb = '#0b1118'`; accents tailwind green-400 `#4ade80`, red-400 `#f87171`, amber-300 `#fcd34d`, sky-300 `#7dd3fc`; active chips `bg-muted` `#1c2534`; popovers `bg-popover` `#101826`.
+
+### XL.2 What changed
+
+- `src/whales/tokens.ts`: palette switched to the reference (`#0b1118` etc.).
+- `src/whales/whales.css`: view switches from monospace to the UI sans (numbers stay mono+tabular); topbar is now the reference toolbar (flex-wrap, 11px muted, `px-3 py-1`, `border-b #171f2c`); toggles became `dh`-style pills with `?/?` glyphs; link chip uses `?` with sky/strikethrough states; insight strip restyled to the two-line `chart-reading` metrics; inline `.whales-sel` selects; circular `?` help button; `? Settings` gear; popover palette.
+- `src/whales/WhalesView.tsx`: inline `Detect`/`Size =` selects in the toolbar (same state as the settings popover); glyphs on all overlay toggles; gear opens the "Big trade bubbles" settings popover; help trigger is the circular `?`; canvas aria-label matches the reference.
+- `qa/whales.spec.ts`: gear/help selectors updated to the new triggers.
+
+### XL.3 Verification
+
+```text
+npm run typecheck      # clean
+npm run verify         # 41 files / 869 tests passed
+npx playwright test qa/whales.spec.ts qa/terminal.spec.ts qa/search.spec.ts --project=desktop
+  11 passed (15.6s)
+```
+
+Documented approximations unchanged (Part XXXIX.4): bidask/tick equivalence on the taker-only
+tape, shared-timeframe link local to this tab, no live-stack run, access-gated shell (evidence
+is bundle-derived, not a screenshot copy). No commit created; tree stays uncommitted.
+
+---
+
+## Part XLI - 31 Oct 2026: Whales matches the reference - D1-D12 + numeric CHECKS
+
+Implemented the 12 concrete differences (D1-D12) the user listed against the reference terminal,
+plus a deterministic check suite (unit + Playwright) that asserts the numbers directly.
+
+### XLI.1 What changed per difference
+
+- **D1 data seam**: mock fixture rebuilt around ONE price series - `buildPath()` now anchors a
+  shared path that converges on the live price (`base + 1700*(1-u)` + wiggle); candles and all
+  trades (including whale prints) read from that same path. Measured seam (last candle close vs
+  last trade price) = 0.052%. Y fit uses only visible candle H/L + 8% padding; overlays never
+  enter the Y fit.
+- **D2 density**: kept ~145 candles default + ~100px right padding (bar ~6.86px). Double-click
+  resets to it.
+- **D3 pile-up**: bubble building is now a per-candle aggregate for `sweep` (summed notional,
+  pie, VWAP), plus an iterative screen-space cluster merge (0.6 x sum of radii) in
+  `src/whales/plan.ts` (`clusterBubbles`). Drawn bubbles 6-7 (<=14), max radius 38px, overlap
+  fraction <=0.025.
+- **D4 tags**: plain outlined text (no box/border), one per cluster, |buy-sell|/total >= 0.35,
+  drawn right of the bubble, white up-triangle on top, max 3, non-overlapping (descending
+  notional order).
+- **D5 labels**: above the bubble (right-above if taken), dark outline, no collisions,
+  priority = largest notional.
+- **D6 zones**: `Zones` default OFF; the only olive overlay is the thin whale-average band
+  (in-view averages, min +/-0.05%, capped at 60px tall).
+- **D7 tooltip**: clamped fully inside the plot rectangle (flips left near the right edge);
+  never covers gutter/axis tags. Yellow whale lines only when the hovered candle has whale data.
+- **D8 gutter**: always the "bubbles/price" histogram (red-left/green-right, rows >=3px, max
+  ~90px); Vol profile toggle draws a faint blue candle-volume layer behind it.
+- **D9 net panel**: header value, per-candle bars and the solid cumulative line now come from
+  the SAME in-view whale store as the reading bar (asserted equal to the dollar). The cyan
+  dashed "everyone else" line keeps its own scale.
+- **D10 time axis**: labels #6b7686 11px mono, HH:MM, >=6 visible at default.
+- **D11 dock**: exactly one verdict string (gold WAIT / green BUY LEAN / red SELL LEAN) with the
+  expand arrow above it.
+- **D12 axis tags**: level/avg axis tags are filtered so none overlap the white last-price or
+  crosshair tags by more than 2px; the reference ray keeps its right-axis tag.
+
+### XLI.2 Checks - what was actually run
+
+```text
+npm run verify          # typecheck + vitest: 42 files / 878 tests passed
+npm run build           # production bundle OK
+npx playwright test qa/whales.spec.ts qa/whales-checks.spec.ts \
+    qa/terminal.spec.ts qa/search.spec.ts --project=desktop
+                         # 12 passed (17.2s)
+
+New tests:
+- server/test/whales.renderPlan.test.ts (9 tests): clustering bounds/radius cap, tag/label
+  non-intersection, tooltip placement inside plot, net header == reading net, gutter caption +
+  time-label constants, axis-tag filtering, sweep per-candle aggregation.
+- qa/whales-checks.spec.ts: reads the debug render plan (window.__whalesPlan with
+  ?debugwhales=1) and asserts the numeric CHECKS, plus live tooltip containment at 10/50/95%
+  width and the single-dock-verdict rule.
+```
+
+Recorded numbers from the last run: visibleCandles 146, rightPad ~95px, seam 0.052%,
+bubbleCount 6, maxRadius 38, overlapMaxFrac 0, tagCount 2, netHeader == readingNet == solidEnd
+(-24,971,295.51), bandHeight 53.2px, timeLabels >=6.
+
+### XLI.3 Honest gaps
+
+- The check suite runs against the mock fixture; a live-stack pass is still outstanding.
+- `bidask`/`tick` aggressor classifiers still resolve identically on the taker-only tape.
+- The shared-timeframe link remains local to this tab.
+- No commit created; working tree stays uncommitted.
+
+---
+
+## Part XLII - 1 Nov 2026: "Vol profile" view (Tradfye-style BTC/USDT terminal)
+
+Implemented the full volume-profile view as its own terminal page (`volprofile`), keeping the
+existing shell (Tradfye topbar + picker + quotes, left view rail, right DecisionRail). The old
+HTML `VolumeProfileView` card list is replaced by a canvas terminal.
+
+### XLII.1 What was built
+
+| Module | File | Responsibility |
+|---|---|---|
+| klines loader + cache | `src/volprofile/store.ts`, `idb.ts`, `mock.ts` | 12,000 1m candles paged from REST, cached in IndexedDB, live-tick top-up of the forming candle; footnote source `loading...` / `from the cache` / `live` |
+| server | `server/src/terminal/data.ts` (`terminalKlinesLong`), `server/src/data/binance.ts` (`fetchKlinesRange` maxPages + `klineStepMs`), `server/src/index.ts` route `/api/terminal/klines`, `server/src/config.ts` `VOLPROFILE_MAX_CANDLES: 12_000 [V]` | paged history (1000/page, up to 12 pages) |
+| decimating candle renderer | `src/volprofile/renderCandles.ts` | classic bars >=1.2px/candle; 1px per-column OHLC decimation below |
+| session VWAP/sigma | `src/volprofile/sessions.ts` | UTC-day sessions, cumulative volume-weighted VWAP + ±1σ/±2σ bands, fingerprint-cached |
+| profile engine | `src/volprofile/profiles.ts` | bins (~0.05% auto, min tick), POC, 70% value area, buy/sell split, delta, per-range cache |
+| range picker | `src/volprofile/VolProfileView.tsx` (Shift+drag, edge drag, × delete) + `render.ts` `drawBand`/`drawRangeHandles` | custom ranges persisted in localStorage |
+| overlays | `src/volprofile/overlays.ts` | "my level" white dashed + star chips (shared `USER_LEVELS_KEY` with Whales), magenta liq dotted in-range, ▲/▼ pinned chips out-of-range, grey reference ray + last-price dotted, stacked axis tags (min gap 20px) |
+| toolbar | `src/volprofile/toolbar.tsx` | Profiles/Mode/Delta segmented pills, At-scale dropdown, gear settings popover, ? guide, all persisted |
+| right pane | `src/volprofile/rightPane.tsx` | newest-first cards: span, POC, VAH/VAL, volume BTC+$, delta, mini histogram; hover highlights range, click selects "current period" |
+| main view | `src/volprofile/VolProfileView.tsx` + `volprofile.css` | rAF render loop, wheel/pan/price-scale/dblclick, crosshair + tooltip with OHLC/volume/buy-sell and profile-row bin stats, dock WAIT/BUY LEAN/SELL LEAN |
+| top-level nav | `src/App.tsx` | added `volprofile` tab after Whales (icon + page); mounts `VolProfileView` with header timeframe default 15m |
+
+### XLII.2 Verification (real output)
+
+```text
+npm run typecheck   # tsc --noEmit: clean
+npm test            # vitest: 42 files / 878 tests passed (7.52s)
+npm run build       # tsc + vite build OK (chunk-size warning pre-existing)
+```
+
+### XLII.3 Flicker fix (same day)
+
+Reported: chart flickers in Timeframe / Session modes. Root causes found by headless frame-diffing
+(Playwright + mock stack): the timeframe view could draw up to ~2,400 bar-profiles per frame
+(8.3 days at 5m) — a huge per-frame paint — and the right pane re-rendered on every mousemove.
+Fixes:
+
+- `thinForDraw()` (`render.ts`): cap drawn profiles per frame at 160, thinned evenly in the
+  original order (stable across pan/zoom).
+- Pane memo no longer depends on `hover`; it recomputes only on settings/ranges/data changes.
+- Hover updates throttled (<0.6px moves ignored) and `setDragSel` deduped — no per-move React churn.
+- Render loop wrapped so a draw exception logs once instead of wedging `dirty` true (which
+  re-rendered every rAF and flashed the chart).
+
+Verified with the same headless frame-diff script: 8 consecutive screenshots per mode,
+`timeframe` and `session`, 0 blocks changed (48x48 grid) — chart output is now pixel-stable.
+
+Follow-up (same day): the timeframe rebuild storm was the remaining flicker driver — every live
+tick invalidated the global series fingerprint and synchronously rebuilt all ~2,400 bar profiles
+inside the render loop (frozen/blank frames). Now:
+- Profiles are keyed by per-range fingerprints (`rangeFingerprint`/`barFingerprint` in
+  `profiles.ts`); only the range containing the forming candle rebuilds on a tick.
+- Only the thinned drawn subset (cap 160, `thinIndices`) plus the 24 pane bars are built at all.
+Measured under the ticking mock stack (via `window.__vpProfileBuilds`): profile rebuilds over 5s
+steady-state = timeframe 3, session 3 (was 30), custom 0 — i.e. one rebuild of the forming
+profile per tick, never a full-window rebuild.
+Reference site note: `tradfye.com/terminal` is invite-gated, so the behaviour was matched to the
+detailed spec from the original brief (timeframe = one profile per header-timeframe bar, auto,
+anchored left, visible bars only).
+
+Follow-up 2 (same day): diagnosed the user's "fast blink in Timeframe" as a dead API, not a
+render bug — their console showed every `/api/*` returning 500 (Vite proxy = backend down). The
+real server was booted and verified healthy (`/api/health` 200; `/api/terminal/klines` returned
+live BTCUSDT 1m candles). Additional hardening landed:
+- Canvas backing store is now sized to the canvas element (`clientWidth/Height`), not the full
+  body — previously the right edge where profile anchors live was scaled/clipped.
+- Render loop skips work while `document.hidden`.
+- Error state is static with a Retry button (no animated loop).
+Frame-delta budget re-measured under the ticking mock stack: p50 16.6ms, p95 ~18.2ms, max
+~25.7ms, 0 long tasks in all three modes — steady 60fps.
+
+Follow-up 3 (same day): the remaining "fast blink" in Timeframe was a repaint-strobe: live ticks
+drove full-canvas redraws whose cost exceeded the frame budget on slower GPUs. Final architecture:
+- **Scene/overlay split**: candles/profiles/axes render to an offscreen scene canvas, rebuilt only
+  when a data/view/settings fingerprint changes; a second transparent canvas stacked above it draws
+  only the crosshair/bands/handles, so mouse moves never touch the scene. (A full-scene blit per
+  pointer move measured slower in software rendering than this split.)
+- Data-driven repaints are gated to once per 200ms (`DATA_RENDER_INTERVAL_MS`); interactive
+  gestures bypass the gate.
+- Hover React state only emits when the hovered candle/bin changes; canvas reads refs.
+- `profileRowAt` uses binary search + outer-width fast reject instead of a full row scan.
+- Persisted settings are sanitized on load (bin size / value-area % / opacity coerced) so no NaN
+  geometry can enter the draw path.
+Measured on the live stack (real API, 1920x1080): TIMEFRAME @rest p50 16.6ms, +mouse p50 16.6ms
+(long tasks 2-6 of 150), SESSION +mouse p50 16.5ms — steady 60fps in all modes, mouse included.
+
+Follow-up 4 (same day): Timeframe UI polish toward the reference look — per-profile bar-length caps
+track on-screen bar spacing (`barCapForProfile`: clamp(spacing×5, 26, 260)px) so each bar's
+histogram stays visually distinct instead of merging into one overlapping strip; POC row is tinted
+yellow above the base row; bar rects are pixel-rounded to avoid hairline seams; the same cap map
+feeds hit-testing so hover always matches the drawn bars. `profileRowAt` got its caps parameter.
+Note: `tradfye.com/terminal` is invite-gated, so exact pixel parity cannot be verified from here;
+geometry follows the brief's reference layout rules.
+
+### XLII.4 Honest gaps
+
+- No Playwright spec yet for this view (the existing QA specs do not cover the volprofile page);
+  browser verification is a manual run of `npm run dev` → Charts → Vol profile.
+- `fetchKlinesRange` now accepts `maxPages`; existing callers unchanged (default 4), covered by the
+  existing suite.
+- Live top-up uses the app-wide tick stream (price only): the forming candle's volume/buy-sell
+  split stays as last REST, corrected on the 60s refresh cycle.
+- Reference ray price = latest session VWAP (documented choice; not yet configurable).
+- No commit created; working tree stays uncommitted.
+
+---
+
+## Part XLIII � 4 Nov 2026: Charts S/R engine
+
+What landed in `src/charts/` (all client-side, no server route added):
+
+- `srEngine.ts` � the engine. Inputs: candles + optional live order-book walls.
+  - S/R levels from fractal swing points (lookback 5) clustered on price, plus a volume-profile
+    pass (100 bins over the last 200 candles) that adds high-volume price nodes as levels.
+  - Order blocks: single-candle (small body, >=1.5x average volume) followed by a strong move, and
+    3-candle consolidation + high-volume blocks. Blocks carry untested/tested state, test count and
+    a break probability.
+  - Wick signals: upper/lower/both wick ratios >=2x body, classified rejection vs exhaustion with
+    weak/moderate/strong strength; high-volume long wicks get a strength boost.
+  - Break probability per level: blends volume-at-level percentile, touch count, time since touch,
+    short momentum and the presence of an order-book wall; clamped to 0.05�0.95.
+  - `flipped` flag: a level is flipped when price has traded through it in the last 10 candles
+    (old resistance reads as support and vice versa); flipped lines draw with a different dash and
+    a `?` marker.
+- `liquidity.ts` � fetchBinance spot depth (`/api/v3/depth`, top 100 levels, polled every 15s),
+  bins levels at 0.04% steps, keeps walls >=12% of the largest bin. HTTP/network errors return []
+  instead of throwing so the chart never breaks on a bad symbol.
+- `extensions.ts` � a klinecharts indicator `SR_ENGINE` renders the whole picture: level lines
+  with strength-based opacity/width, 6-tick zone shading, right-side labels (price, break %, touches,
+  volume, source), gold dashed live liquidity walls with notional, shaded order-block rects with
+  labels, wick markers (? rejection / ? exhaustion), and a top-of-chart readout of nearest support/
+  resistance distance + break %.
+- `hooks/useKlineChart.ts` � the SR_ENGINE indicator is created once per dataset and updated
+  live via `chart.overrideIndicator` when the engine output changes, so live ticks repaint S/R
+  without recreating any indicator.
+- `charts/ChartPane.tsx` � computes the engine output with `useMemo` from candles + walls and
+  polls the depth feed every 15s.
+- `charts/ChartSidebar.tsx` � new "S/R Engine" tab: current price, nearest S/R with distance/age
+  and break %, live liquidity walls, ranked resistance/support tables (source, touches, volume,
+  wall size, break %), order blocks, wick signals, and the top-5 break probabilities.
+
+Rules honored: no invented numbers (no level ? nothing drawn; no wall ? no liquidity line), levels
+change with coin/timeframe because the engine re-runs on dataset change, and every displayed
+probability is the engine's bounded output.
+
+Verification (real runs, 4 Nov 2026):
+
+``text
+> npm run build
+> tsc --noEmit && vite build
+? 152 modules transformed
+? built in 2.26s
+
+> npm run verify
+> tsc --noEmit
+
+> vitest run
+ Test Files  43 passed (43)
+      Tests  887 passed (887)   # includes 9 new srEngine tests
+
+npx vitest run server/test/srEngine.test.ts
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+``
+
+Known honest gaps:
+
+- The volume/order-block passes run on the loaded candle set (last ~1500 bars); the depth walls are
+  a live snapshot, not the historical heatmap the terminal records in IndexedDB.
+- Break probabilities are a heuristic blend of the listed factors, not a fitted model; they are
+  honest bounds, not calibrated odds (no ledger evidence yet).
+- The wick/order-block overlay marks only rendered candles; a wick on a bar scrolled out of view is
+  still in the panel list.
+- No Playwright spec yet for the S/R tab (QA specs cover other pages); browser verification is a
+  manual `npm run dev` ? Charts ? S/R Engine run.
+- No Playwright spec yet for the S/R tab (QA specs cover other pages); browser verification is a
+  manual 
+pm run dev ? Charts ? S/R Engine run.
+
+### XLIII.5 Follow-up (same day): single-line S/R + accuracy fixes
+
+User feedback: the chart must mark exactly ONE support line and ONE resistance line, and the
+marked levels must be accurate. Changes:
+
+- The chart overlay now draws only 
+earestSupport and 
+earestResistance (the primaries), not the
+  full candidate list. The sidebar lists stay as research context.
+- Level selection is quality-first: within an 8% relevance window the strongest level wins (major >
+  strong > moderate > weak); ties resolve to the nearest. Fallback is the nearest level.
+- Flip logic corrected: a level flips only when price is on the opposite side of it (a resistance
+  below price reads as support, and vice versa). Before this fix a level could flip while still on
+  the same side, producing a "support" above price.
+- Touch counting fixed: swing clusters now carry their member count as touches (cluster resolution
+  is 0.06% of price, not 4 price ticks). Previously near-identical swings split into separate
+  1-touch clusters that were filtered out, leaving no levels on clean ranges.
+- Duplicate levels within 0.06% are merged (strength max, touches/volume summed, wall kept).
+- Volume-profile levels now require a real outlier (=2.2� median node volume) so uniform baselines
+  stop generating dozens of spurious levels.
+- Break probabilities are recomputed after merging so the shown number matches the final level.
+
+Verification (real runs, 4 Nov 2026):
+
+``text
+> npm run verify
+ Test Files  43 passed (43)
+      Tests  889 passed (889)   # 11 srEngine tests now
+
+> npm run build
+? built in 2.45s
+``
+
+---
+
+## Part XLIV � 4 Nov 2026: S/R engine follow-up � break detection, status panel, config, big-move candles
+
+Follow-up on Part XLIII per user direction. What changed:
+
+- **Break detection state machine** (detectBreakStatus in src/charts/srEngine.ts):
+  - Confirms a break only on a candle CLOSE beyond the level (not an intraday wick).
+  - Volume confirmation: break-candle volume >= 1.3x the 10-bar average.
+  - Fake-out filter: if any candle within etestWindow (6) closes back through the
+    level, the break is flagged weak � "level reclaimed � likely fake-out".
+  - Strength: strong (volume confirmed, no reclaim), medium (close-only), weak
+    (fake-out). BreakStatus carries type, price, timestamp, strength, confirmed,
+    reason. Wired into unSREngine for the flipped primary level.
+- **Status panel on the chart** (ChartPane.tsx + charts.css): a small HTML panel
+  top-left under the HUD showing resistance/support prices, distance from price in %,
+  break probability, and a break alert banner ("RESISTANCE BROKEN AT X � volume
+  confirmed, no retest failure" etc.). Pointer-events none so it never blocks the
+  chart.
+- **Configurable thresholds**: SREngineConfig + DEFAULT_SR_CONFIG exported.
+  swingLookback, minTouches, volumeMultiplier, relevanceWindowPct, hardWindowPct,
+  obMinBodyFraction, obVolumeMultiple, wickMinRatio, bigMoveMinBodyPct,
+  bigMoveVolumeMultiple, breakLookback, retestWindow. The engine previously had these
+  hard-coded; now every threshold is tunable from one object.
+- **Big-move candles** (detectBigMoveCandles): single candles whose body covers
+  >=70% of the range AND volume >=1.8x the 20-bar average, tagged bullish/bearish.
+  Drawn on the chart as ?/? BIG MOVE markers and listed in the sidebar.
+- **Sidebar**: added Break Alert card and Big Move candles card to the S/R tab.
+- Coin/timeframe switching stays stateless-clean: the engine recomputes fresh from
+  the new dataset key, and the liquidity poll cancels on symbol change (effect
+  cleanup) so no stale walls leak across symbols.
+
+Tests added in server/test/srEngine.test.ts (15 total now): volume-confirmed break
+(strong), fake-out reclaim (weak), big-move detection, engine-output shape. The first
+two fixtures had to be corrected to stay below the level before the break, otherwise
+the detector correctly finds an earlier crossing in the synthetic range.
+
+Verification (real runs, 4 Nov 2026):
+
+``text
+> npm run verify
+> tsc --noEmit
+> vitest run
+ Test Files  43 passed (43)
+      Tests  893 passed (893)   # 15 srEngine tests now
+
+> npm run build
+? built in 2.22s
+``
+
+Honest gaps:
+
+- Break status only triggers for the flipped PRIMARY level (the one drawn). A break of
+  a secondary level is not alerted; the probabilities list still shows them.
+- Retest confirmation is close-based only (no volume check on the retest itself).
+- No Playwright spec yet for the S/R panel; browser verification is manual
+  (
+pm run dev ? Charts ? observe panel + switch coins/timeframes).
+
+---
+
+## Part XLV - 5 Nov 2026: S/R engine — heatmap history wired in, marker index fix, shared engine output
+
+Follow-up on Parts XLIII/XLIV against the original brief: "read and combine multiple data
+layers — live price action, heatmap data, volume profile / order flow". The heatmap layer was
+computed in code but never fed to the engine, and the wick/big-move markers drew at the wrong
+candles. What changed:
+
+- **Heatmap history now feeds the engine** (`src/charts/useSREngine.ts`, new). The hook owns the
+  engine's live inputs for one symbol/interval: order-book walls polled every 15 s
+  (`fetchLiquidityWalls`) and the server-recorded depth heatmap history polled every 60 s
+  (`api.terminalHistory` via `fetchTerminalHistoryForCharts`). It computes `runSREngine` once and
+  returns the output. The chart overlay **and** the sidebar S/R tab render the same object, so the
+  two surfaces cannot disagree.
+- **One engine call per render** — `ChartPane` computed its own output with walls only, and the
+  sidebar `SRPanel` computed another with neither walls nor history. Both now receive the shared
+  `srOutput` from `ChartsTerminal`. The sidebar S/R tables now see live walls and heatmap scoring.
+- **Marker index bug fixed** (`src/charts/srEngine.ts`): wick signals and big-move candles store
+  `candleIndex` relative to their lookback slice; the canvas draw pass converted it straight to an
+  x-axis dataset index, so markers landed near the left edge once the chart held more bars than the
+  window. Indices are now absolute into the passed candle array (offset = length − slice length).
+- **Repair of a corrupted file**: `srEngine.ts` had a truncated tail (278 NUL bytes masking a
+  missing `fmtAge` body and a duplicated `offset` declaration). Restored the tail, removed the
+  duplicate, stripped the NULs.
+- **`enableBacktest` was dead** — the gate read the hoisted `runBacktest` function instead of the
+  parameter; the parameter now gates the backtest path.
+
+Tests added in `server/test/srEngine.test.ts` (15 → 19): wick indices absolute into a 301-candle
+array (floor ≥ 201), big-move indices absolute (floor ≥ 101), engine output with a dense heatmap
+history keeps the same level set and produces non-zero `historyLiquidityScore`, and
+`scoreLevelWithHistory` monotonicity (rich profile > 0, empty = 0).
+
+Verification (real runs, 5 Nov 2026):
+
+```text
+> npx vitest run server/test/srEngine.test.ts
+ Test Files  1 passed (1)
+      Tests  19 passed (19)
+
+> npm run verify
+> tsc --noEmit
+> vitest run
+ Test Files  43 passed (43)
+      Tests  897 passed (897)   # 19 srEngine tests now
+
+> npm run build
+✓ built in 3.13s
+
+> npx playwright test qa/charts.spec.ts
+  5 passed, 1 skipped (mobile drawing smoke)
+```
+
+New Playwright spec `qa/charts.spec.ts` → "S/R engine panel and sidebar tab render honest levels":
+asserts the chart panel shows S/R ENGINE/LIVE, each cell resolves to either a price+break% or an
+honest dash, the sidebar S/R tab mounts, and a timeframe switch (keyboard `1`) re-runs the engine
+and updates the sidebar header — on both desktop and mobile.
+
+Honest gaps (unchanged from XLIV unless noted):
+- Break alert still only fires for the flipped primary level; secondary-level breaks appear only in
+  the probabilities list.
+- Break probabilities remain a heuristic blend — bounded, not calibrated (no ledger evidence).
+- The heatmap history depends on the server-side recorder (`terminal-history.db`); before any
+  frame has been captured the engine simply runs without that layer (empty profile, no invented
+  liquidity).
+
+---
+
+## Part XLVI - 5 Nov 2026: S/R engine — break alert scope, honesty labels, heatmap health
+
+Follow-up on user direction: fire break alerts for secondary levels too, stop presenting the
+heuristic break figure as calibrated odds, and surface the heatmap cold-start fallback honestly.
+
+- **Break alerts now cover primary + secondary levels** (`srEngine.ts`): a new exported
+  `collectBreakEvents(candles, watched, config)` runs the confirmation rules over a watched set;
+  each `BreakStatus` carries a `scope` (`primary` | `secondary`). `runSREngine` watches the two
+  primary levels always plus the strongest non-primary level per side when `alertOnSecondaryBreaks`
+  (new config flag, default true) is on. Chart overlay still draws only the two primary lines.
+  - UI: the chart panel keeps the loud banner for the primary break and shows secondary breaks as
+    quiet, dimmer chips. The sidebar Break Alert card lists every event with its scope and tone;
+    secondaries render dimmed (`is-secondary`).
+  - A user setting `alertOnSecondaryBreaks` was added to `ChartSettings` (persisted via
+    `settings.ts`) with a toggle in the S/R Engine summary card.
+- **Break-strength labels + honesty note**: the labels "72% break" are now "STRONG · 72% break"
+  etc. (`breakStrengthLabel`), and every break figure carries a tooltip with the exported
+  `HEURISTIC_DISCLAIMER`: "Heuristic based on volume, heatmap pressure & structure — not
+  calibrated odds". Full calibration (rolling predicted-vs-actual window) is not built; it remains
+  the documented next step.
+- **Heatmap cold-start honesty**: `runSREngine` now reports `heatmapHealth` (`live` | `fallback`
+  | `offline`) and the hook reports the fetch status (`loading`/`live`/`fallback`/`offline`).
+  With no frames the engine uses candle volume profile + structure + order book (real data, a
+  clearly weaker fallback — never an invented number). Both the chart panel and the sidebar show a
+  `HM LIVE / HM FALLBACK / HM OFFLINE` chip with an explanatory tooltip.
+
+Tests: 19 → 22 in `server/test/srEngine.test.ts` (`collectBreakEvents` primary+secondary scopes,
+suppression flag, heatmap health states).
+
+Verification (real runs, 5 Nov 2026):
+
+```text
+> npx vitest run server/test/srEngine.test.ts
+ Test Files  1 passed (1)
+      Tests  22 passed (22)
+
+> npm run verify
+> tsc --noEmit
+> vitest run
+ Test Files  43 passed (43)
+      Tests  900 passed (900)
+
+> npm run build
+✓ built in 2.55s
+
+> npx playwright test qa/charts.spec.ts
+  5 passed, 1 skipped (mobile drawing smoke)
+```
+
+Honest gaps:
+- Secondary break events are surfaced only when a close crossed the level during `breakLookback`;
+  a wick-only spike still does not alert.
+- Break figures remain heuristic; the tooltip says so. The rolling calibration (Option B) is
+  deliberately not built — it needs a real outcome store, not another feel-based weight.
+
+---
+
+## Part XLVII - 5 Nov 2026: S/R engine — three-tier break strength labels (Gap 2)
+
+Follow-up on the agreed Gap-2 spec: replace the four-tier confidence wording with exactly three
+tiers and put the raw score + label on the level type.
+
+- `toBreakLabel(score)` in `src/charts/srEngine.ts` with the agreed thresholds: **≥ 0.72 →
+  Strong, ≥ 0.45 → Medium, < 0.45 → Weak**. `breakStrengthLabel` is now an alias returning the
+  same three tiers; `breakLabelTone` maps a label to the existing `low/medium/high` chip tone.
+- `SRLevel` carries `breakStrength` (raw 0–1 heuristic, numerically identical to the retained
+  `breakProbability` compatibility field) and `breakLabel` (the three-tier label). Both are set at
+  level creation and refreshed whenever the engine recomputes a level's break score after merging.
+- UI now renders the three-tier label everywhere: chart panel cells, S/R sidebar tables, summary
+  card and break-probabilities list (e.g. "Medium · 48% break"); the canvas level line appends
+  `· heuristic` to its metrics line so the caveat is visible on the line itself. Tooltips keep the
+  exported `HEURISTIC_DISCLAIMER`.
+
+Tests: 22 → 24 in `server/test/srEngine.test.ts` (threshold boundaries 0.72/0.71/0.45/0.44, and
+level consistency `breakStrength === breakProbability` + `breakLabel === toBreakLabel(...)`).
+
+Verification (real runs, 5 Nov 2026):
+
+```text
+> npx vitest run server/test/srEngine.test.ts
+ Test Files  1 passed (1)
+      Tests  24 passed (24)
+
+> npm run verify
+ Test Files  43 passed (43)
+      Tests  902 passed (902)
+
+> npm run build
+✓ built in 2.37s
+
+> npx playwright test qa/charts.spec.ts
+  5 passed, 1 skipped (mobile drawing smoke)
+```
+
+Honest note: `breakProbability` remains on `SRLevel` as a same-valued compatibility duplicate; the
+display and label code path uses `breakStrength`/`breakLabel`. A later cleanup pass can drop the
+duplicate once nothing else reads it.

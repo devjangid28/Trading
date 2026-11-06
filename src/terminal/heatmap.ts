@@ -101,21 +101,25 @@ export function sparseThresholds(
   };
 }
 
-/** Map a row total onto the reference's four sparse bands. */
-export function sparseIntensity(usd: number, thresholds: SparseThresholds, gain = 1): number {
-  if (usd <= 0 || thresholds.low <= 0) return 0;
-  if (usd < thresholds.low) return 0;
-  const span = (a: number, b: number) => Math.max(1e-9, b - a);
-  let t = 0;
-  if (usd < thresholds.med) {
-    t = 0.04 + 0.38 * ((usd - thresholds.low) / span(thresholds.low, thresholds.med));
-  } else if (usd < thresholds.high) {
-    t = 0.42 + 0.28 * ((usd - thresholds.med) / span(thresholds.med, thresholds.high));
-  } else if (usd < thresholds.max) {
-    t = 0.70 + 0.20 * ((usd - thresholds.high) / span(thresholds.high, thresholds.max));
-  } else {
-    t = 0.90 + 0.10 * clampNumber((usd - thresholds.max) / Math.max(1, thresholds.max), 0, 1);
-  }
+/** The visible floor selected by the Contrast control: 40th / 70th / 90th. */
+export function contrastFloor(thresholds: SparseThresholds, contrast: 'low' | 'med' | 'high'): number {
+  return contrast === 'low' ? thresholds.low : contrast === 'high' ? thresholds.high : thresholds.med;
+}
+
+/**
+ * Map a row total onto the reference's four sparse bands. The scale is
+ * logarithmic between the visible floor and the 95th-percentile size, so a
+ * wall that is ten times the floor does not saturate the whole chart.
+ */
+export function sparseIntensity(
+  usd: number,
+  thresholds: SparseThresholds,
+  gain = 1,
+  floor = thresholds.low,
+): number {
+  if (usd <= 0 || floor <= 0 || thresholds.max <= floor) return 0;
+  if (usd < floor) return 0;
+  const t = Math.log(usd / floor) / Math.max(1e-9, Math.log(thresholds.max / floor));
   return clampNumber(t * gain, 0, 1);
 }
 
@@ -424,7 +428,7 @@ export function stepMsFor(spanMs: number, mode: StepMode): number {
     const seconds = Number.parseInt(mode, 10);
     return Number.isFinite(seconds) ? seconds * 1_000 : 5_000;
   }
-  return clampNumber(Math.round(spanMs / 90 / 1_000) * 1_000, 1_000, 300_000);
+  return clampNumber(Math.round(spanMs / 45 / 1_000) * 1_000, 1_000, 300_000);
 }
 
 /**
@@ -472,6 +476,8 @@ export function bubblePoints(
 
   const stepTrades = (source: readonly TerminalTrade[]): BubblePoint[] => {
     const stepMs = stepMsFor(end - start, stepMode);
+    const priceSpan = Math.max(1e-9, priceMax - priceMin);
+    const priceBuckets = Math.max(100, Math.round(rows));
     const bins = new Map<string, {
       firstT: number;
       lastT: number;
@@ -483,7 +489,11 @@ export function bubblePoints(
     }>();
     for (const trade of source) {
       const timeBin = Math.floor((trade.t - start) / stepMs);
-      const priceBin = rowIndexForPrice(trade.price, priceMin, priceMax, rows);
+      const priceBin = clampNumber(
+        Math.floor(((trade.price - priceMin) / priceSpan) * priceBuckets),
+        0,
+        priceBuckets - 1,
+      );
       const key = `${timeBin}:${priceBin}`;
       const bin = bins.get(key) ?? {
         firstT: trade.t,
@@ -584,7 +594,7 @@ export function bubbleReferenceUsd(trades: readonly TerminalTrade[]): number {
  * absolute notional, not a viewport-relative quantile.
  */
 export function bubbleRadius(usd: number, _referenceUsd: number, scale = 1): number {
-  const diameter = 6 + 1.8 * Math.sqrt(Math.max(0, usd) / 1_000);
+  const diameter = 6 + 1.35 * Math.sqrt(Math.max(0, usd) / 1_000);
   return clampNumber(diameter, 8, 64) * clampNumber(scale, 0.25, 3) / 2;
 }
 
@@ -670,12 +680,13 @@ export function heatIntensity(usd: number, scale: number, gain: number): number 
 
 const HEAT_STOPS: Array<{ t: number; rgb: [number, number, number] }> = [
   { t: 0, rgb: [11, 46, 122] },
-  { t: 0.28, rgb: [29, 78, 216] },
+  { t: 0.35, rgb: [29, 78, 216] },
   { t: 0.50, rgb: [37, 99, 235] },
-  { t: 0.68, rgb: [34, 211, 238] },
+  { t: 0.70, rgb: [34, 211, 238] },
   { t: 0.82, rgb: [165, 243, 252] },
   { t: 0.90, rgb: [240, 253, 255] },
-  { t: 1, rgb: [253, 224, 71] },
+  { t: 0.94, rgb: [253, 224, 71] },
+  { t: 1, rgb: [250, 204, 21] },
 ];
 
 export function heatColor(intensity: number, opacity = 1): string {
@@ -716,11 +727,7 @@ export function tooltipPosition(
 
 export function humanizeDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '0s';
-  if (ms < 1_000) return 'under 1s';
   if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
-  const mins = Math.floor(ms / 60_000);
-  const secs = Math.round((ms % 60_000) / 1_000);
-  if (secs === 0 || secs === 60) return `${mins} min`;
-  return `${mins}m ${secs}s`;
+  return `${Math.max(1, Math.round(ms / 60_000))} min`;
 }
 export const fmtDuration = humanizeDuration;

@@ -15,6 +15,7 @@ import {
 } from 'klinecharts';
 import type { Candle } from '../../shared/types';
 import { registerChartExtensions } from '../charts/extensions';
+import type { SREngineOutput } from '../charts/srEngine';
 import type {
   ChartType,
   CrosshairState,
@@ -36,7 +37,7 @@ const OVERLAY_BY_TOOL: Partial<Record<DrawingTool, string>> = {
   text: 'textNote',
 };
 
-const MAIN_INDICATORS = ['EMA', 'SMA', 'BOLL', 'VWAP_CUSTOM', 'SESSION_BANDS'];
+const MAIN_INDICATORS = ['EMA', 'SMA', 'BOLL', 'VWAP_CUSTOM', 'SESSION_BANDS', 'SR_ENGINE'];
 const PANE_INDICATORS = ['pane_rsi', 'pane_macd', 'pane_vol'];
 
 const BASE_STYLES: DeepPartial<Styles> = {
@@ -122,6 +123,8 @@ export interface UseKlineChartOptions {
   scale: ScaleType;
   indicators: IndicatorConfig[];
   sessions: Record<SessionId, boolean>;
+  /** Latest S/R engine output, recomputed by the caller whenever bars or liquidity change. */
+  srOutput?: SREngineOutput;
   onCrosshair: (state: CrosshairState) => void;
   onVisibleRange: (state: VisibleRangeState) => void;
 }
@@ -190,6 +193,7 @@ export function useKlineChart(options: UseKlineChartOptions): { api: KlineChartA
     scale,
     indicators,
     sessions,
+    srOutput,
     onCrosshair,
     onVisibleRange,
   } = options;
@@ -200,9 +204,11 @@ export function useKlineChart(options: UseKlineChartOptions): { api: KlineChartA
   const resetRef = useRef<number | null>(null);
   const appliedRef = useRef(false);
   const overlayIdsRef = useRef<Set<string>>(new Set());
+  const srOutputRef = useRef<SREngineOutput | undefined>(undefined);
   const callbacksRef = useRef({ onCrosshair, onVisibleRange });
   const [ready, setReady] = useState(false);
   callbacksRef.current = { onCrosshair, onVisibleRange };
+  srOutputRef.current = srOutput;
 
   useEffect(() => {
     registerChartExtensions();
@@ -326,6 +332,12 @@ export function useKlineChart(options: UseKlineChartOptions): { api: KlineChartA
       { id: 'candle_pane' },
     );
 
+    chart.createIndicator(
+      { name: 'SR_ENGINE', extendData: { output: srOutputRef.current } },
+      true,
+      { id: 'candle_pane' },
+    );
+
     for (const indicator of indicators) {
       if (!indicator.visible) continue;
       if (indicator.kind === 'EMA' || indicator.kind === 'SMA' || indicator.kind === 'BOLL') {
@@ -365,6 +377,15 @@ export function useKlineChart(options: UseKlineChartOptions): { api: KlineChartA
       }
     }
   }, [ready, indicators, sessions, datasetKey]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !ready || !srOutput) return;
+    chart.overrideIndicator(
+      { name: 'SR_ENGINE', extendData: { output: srOutput } },
+      'candle_pane',
+    );
+  }, [ready, srOutput]);
 
   const beginDraw = useCallback((tool: DrawingTool) => {
     const chart = chartRef.current;

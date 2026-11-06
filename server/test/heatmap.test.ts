@@ -104,6 +104,16 @@ describe('trade bubbles and volume', () => {
     expect(points).toHaveLength(3);
   });
 
+  it('keeps distinct price buckets in the same time step separate', () => {
+    const sameTime = [
+      trade(1, 1_000, 100, 1, 'buy'),
+      trade(2, 1_000, 101, 1, 'buy'),
+    ];
+    const points = bubblePoints(sameTime, 0, 60_000, 'steps', '10s', 0, 90, 110, 1);
+    expect(points).toHaveLength(2);
+    expect(points.map((point) => point.price)).toEqual([100, 101]);
+  });
+
   it('honours the minimum trade filter and off mode', () => {
     expect(bubblePoints(trades, 0, 60_000, 'trades', 'auto', 150, 90, 110, 20).map((p) => p.count)).toEqual([1]);
     expect(bubblePoints(trades, 0, 60_000, 'off', 'auto', 0, 90, 110, 20)).toEqual([]);

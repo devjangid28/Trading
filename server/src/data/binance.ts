@@ -84,6 +84,11 @@ function intervalMs(interval: string): number {
   return ms;
 }
 
+/** Milliseconds per kline bar. Exported so paged range reads can size their walk. */
+export function klineStepMs(interval: string): number {
+  return intervalMs(interval);
+}
+
 /**
  * Binance klines come back oldest-first as 12 string arrays:
  * [openTime, open, high, low, close, volume, closeTime, quoteVolume, trades,
@@ -203,6 +208,7 @@ export async function fetchKlinesRange(
   fromTs: number,
   toTs: number,
   purpose: 'essential' | 'normal' | 'nonessential' = 'normal',
+  maxPages = 4,
 ): Promise<Candle[]> {
   if (!KLINE_INTERVALS.has(interval)) throw new Error(`Unsupported interval: ${interval}`);
   const step = intervalMs(interval);
@@ -210,8 +216,11 @@ export async function fetchKlinesRange(
   const seen = new Set<number>();
   let cursor = fromTs;
 
-  // Four pages covers 4000 candles — 14 days at 5 m, 69 days at 1 h.
-  for (let page = 0; page < 4 && cursor <= toTs; page++) {
+  // Four pages covers 4000 candles — 14 days at 5 m, 69 days at 1 h. The
+  // growth profile view asks for up to 12,000 1m candles, so the walk size is
+  // a parameter; callers pass the page count their window actually needs.
+  const pages = Math.min(24, Math.max(1, Math.round(maxPages)));
+  for (let page = 0; page < pages && cursor <= toTs; page++) {
     const end = Math.min(toTs, cursor + 1000 * step - 1);
     const path =
       `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}` +

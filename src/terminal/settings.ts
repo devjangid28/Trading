@@ -134,10 +134,28 @@ export const MIN_WALL_USD = 50_000;
 export const WALL_NEAR_PCT = 0.001;
 /** [TUNED] A pull only counts as "nearby" inside this trailing window. */
 export const PULL_WINDOW_MS = 5 * 60_000;
+/** [TUNED] A pull must be a real size collapse, not a one-tick resize. */
+export const PULL_DROP_RATIO = 0.8;
+/** [TUNED] A pulled level counts as similar when it was at least this share of the wall. */
+export const PULL_SIMILAR_RATIO = 0.25;
 /** [TUNED] Default resolution of a rendered heatmap cell in CSS pixels. */
 export const DEFAULT_ROW_PX = 6;
 /** [TUNED] Ladder rows in the right-hand columns. */
 export const LADDER_ROW_PX = 19;
+/** [TUNED] Default bubble floor: the reference reads ≈$10–20K at 15m. */
+export const DEFAULT_BUBBLE_FLOOR_USD = 10_000;
+/** [TUNED] Hard cap on bubbles drawn in one frame. */
+export const MAX_BUBBLES = 150;
+/** [TUNED] Bubbles at or above this notional always carry a USD label. */
+export const BUBBLE_LABEL_USD = 250_000;
+/** [TUNED] Liquidity add/pull markers must be this large to draw. */
+export const LIQ_EVENT_USD = 150_000;
+/** [TUNED] Add/pull markers only draw this close to the live edge. */
+export const LIQ_EVENT_WINDOW_MS = 30_000;
+/** [TUNED] Maximum wall labels in the right-hand margin. */
+export const WALL_LABEL_COUNT = 6;
+/** [TUNED] Wall label text in the plot margin. */
+export const WALL_LABEL_FONT_PX = 12;
 
 export interface HeatmapSettings {
   span: TerminalSpan;
@@ -168,7 +186,7 @@ export const DEFAULT_SETTINGS: HeatmapSettings = {
   contrast: 'med',
   bubbles: 'auto',
   bubbleSize: 'm',
-  bubbleFloor: 'top20',
+  bubbleFloor: '10k',
   columns: DEFAULT_COLUMNS,
   rowPx: DEFAULT_ROW_PX,
   minLiquidityUsd: 0,

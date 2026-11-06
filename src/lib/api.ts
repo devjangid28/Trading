@@ -257,6 +257,17 @@ export const api = {
       `/terminal/candles?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`,
       s,
     ),
+  /** Long kline history (up to 12,000 1m candles) for the volume-profile view. */
+  terminalKlines: (
+    symbol: string,
+    interval: import('../../shared/types').TerminalInterval = '1m',
+    limit = 12_000,
+    s?: AbortSignal,
+  ) =>
+    get<import('../../shared/types').TerminalCandles>(
+      `/terminal/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limit}`,
+      s,
+    ),
   news: (s?: AbortSignal) => get<import('../../shared/types').NewsFeed>('/news', s),
   macro: (s?: AbortSignal) => get<import('../../shared/types').MacroState>('/macro', s),
   calendar: (s?: AbortSignal) => get<CalendarResult>('/calendar', s),

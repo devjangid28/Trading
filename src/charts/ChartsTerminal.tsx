@@ -20,6 +20,7 @@ import {
   type SidebarTab,
 } from './types';
 import { loadChartSettings, makeIndicator, saveChartSettings } from './settings';
+import { useSREngine } from './useSREngine';
 import './charts.css';
 
 interface ChartsTerminalProps {
@@ -164,6 +165,12 @@ export function ChartsTerminal({ symbol, onSymbol }: ChartsTerminalProps) {
     [settings.chartType, market.bars],
   );
   const datasetKey = `${settings.symbol}|${settings.interval}`;
+  const { output: srOutput } = useSREngine(settings.symbol, settings.interval, chartData, {
+    config: { alertOnSecondaryBreaks: settings.alertOnSecondaryBreaks },
+  });
+  const toggleSecondaryAlerts = useCallback(() => {
+    setSettings((current) => ({ ...current, alertOnSecondaryBreaks: !current.alertOnSecondaryBreaks }));
+  }, []);
 
   return (
     <div
@@ -205,6 +212,7 @@ export function ChartsTerminal({ symbol, onSymbol }: ChartsTerminalProps) {
           scale={settings.scale}
           indicators={settings.indicators}
           sessions={settings.sessions}
+          srOutput={srOutput}
           loading={market.loading}
           error={market.error}
           status={market.status}
@@ -215,6 +223,10 @@ export function ChartsTerminal({ symbol, onSymbol }: ChartsTerminalProps) {
           tab={settings.sidebarTab}
           open={settings.sidebarOpen}
           ticker={market.ticker}
+          interval={settings.interval}
+          srOutput={srOutput}
+          alertOnSecondaryBreaks={settings.alertOnSecondaryBreaks}
+          onToggleSecondaryAlerts={toggleSecondaryAlerts}
           onTab={setSidebarTab}
           onToggle={toggleSidebar}
         />

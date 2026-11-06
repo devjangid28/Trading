@@ -164,8 +164,8 @@ export function planLines(plan: PlanContext, priceMin: number, priceMax: number)
       price: plan.buyAbove,
       label: `buy above ${plan.buyAbove.toFixed(2)}`,
       color: '#4ade80',
-      dash: [2, 5],
-      width: 1,
+      dash: [2, 4],
+      width: 1.5,
     }, priceMin, priceMax);
   }
   if (plan.sellBelow !== null) {
@@ -174,8 +174,8 @@ export function planLines(plan: PlanContext, priceMin: number, priceMax: number)
       price: plan.sellBelow,
       label: `sell below ${plan.sellBelow.toFixed(2)}`,
       color: '#f87171',
-      dash: [2, 5],
-      width: 1,
+      dash: [2, 4],
+      width: 1.5,
     }, priceMin, priceMax);
   }
   for (const target of plan.targets.slice(0, 3)) {
@@ -304,9 +304,9 @@ export function userLines(levels: readonly number[], priceMin: number, priceMax:
       kind: 'user',
       price,
       label: '\u2605 my level',
-      color: 'rgba(229,231,235,0.7)',
-      dash: [4, 3],
-      width: 1,
+      color: 'rgba(255,255,255,0.92)',
+      dash: [12, 6],
+      width: 1.5,
     }, priceMin, priceMax);
   }
   return out;

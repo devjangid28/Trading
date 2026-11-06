@@ -7,24 +7,46 @@ test('footprint mock renders the required composition and reading line', async (
   await page.goto('/?tab=footprint&mock=1');
 
   await expect(page.locator('.tradfye-brand')).toBeVisible();
-  if (await page.locator('.tradfye-view-select').isVisible()) {
-    await expect(page.locator('.tradfye-view-select')).toHaveValue('footprint');
+  await expect(page.locator('.tradfye-tabs')).toHaveCount(1);
+  if ((page.viewportSize()?.width ?? 0) >= 1024) {
+    await expect(page.locator('.tradfye-tabs')).toBeVisible();
   } else {
-    await expect(page.getByRole('tab', { name: 'Footprint' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.tradfye-tabs')).not.toBeVisible();
   }
+  await expect(page.locator('.tradfye-tab.is-on')).toContainText('Footprint');
+  await expect(page.locator('.app-tabs').getByRole('button', { name: 'Footprint', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('.fp-toolbar')).toBeVisible();
   await expect(page.locator('.fp-toolbar')).toContainText('Candles');
   await expect(page.locator('.fp-toolbar')).toContainText('Show');
   await expect(page.locator('.fp-toolbar')).toContainText('Rows');
   await expect(page.locator('.fp-toolbar')).toContainText('Units');
   await expect(page.locator('.fp-toolbar')).toContainText('Load older');
-  await expect(page.locator('.fp-toolbar')).toContainText('From Oct 29, 08:45 AM UTC');
+  const utcNow = new Date();
+  const baseOpen = Date.UTC(
+    utcNow.getUTCFullYear(),
+    utcNow.getUTCMonth(),
+    utcNow.getUTCDate(),
+    8,
+    45,
+  );
+  const mockStepMs = 5 * 60_000;
+  const mockLastOpen = baseOpen + 11 * 15 * 60_000;
+  const mockFirstT = mockLastOpen - 11 * mockStepMs;
+  const expectedFrom = new Date(mockFirstT).toLocaleString('en-US', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+  await expect(page.locator('.fp-toolbar')).toContainText(`From ${expectedFrom} UTC`);
   await expect(page.locator('.fp-toolbar')).toContainText('Settings');
   await expect(page.locator('.fp-mock-badge')).toHaveText('MOCK');
   await expect(page.locator('.fp-mock-note')).toContainText('not the live market');
 
   await expect(page.locator('.fp-reading')).toHaveText(
-    'This candle: Δ -3.74 — quiet candle — too little volume to read. Most volume at 80142.50 (POC). Imbalances: 3 buy / 4 sell rows.',
+    'This candle: O 80300.00 H 80305.00 L 79990.00 C 80142.42 — Δ -3.74 — quiet candle — too little volume to read. Most volume at 80142.50 (POC). Imbalances: 3 buy / 4 sell rows.',
   );
 
   const canvas = page.locator('canvas[aria-label="Footprint chart: order flow inside each candle"]');
@@ -41,6 +63,14 @@ test('footprint mock renders the required composition and reading line', async (
   await page.locator('.fp-toolbar').getByRole('button', { name: 'How to read the footprint' }).click();
   await expect(page.getByRole('dialog', { name: 'Footprint — what\'s inside each candle' })).toBeVisible();
   await page.keyboard.press('Escape');
+
+  await page.evaluate(() => {
+    const toolbar = document.querySelector('.fp-toolbar') as HTMLElement | null;
+    const row = document.querySelector('.fp-toolbar .toolbar-row') as HTMLElement | null;
+    if (toolbar) toolbar.scrollLeft = 0;
+    if (row) row.scrollLeft = 0;
+    (document.activeElement as HTMLElement | null)?.blur();
+  });
 
   await page.screenshot({ path: `qa/screens/footprint-01-mock-${testInfo.project.name}.png`, fullPage: true });
 

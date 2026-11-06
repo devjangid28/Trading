@@ -2,7 +2,10 @@ import type {
   TerminalBook, TerminalBookLevel, TerminalCandles, TerminalInterval, TerminalTrade,
 } from '../../../shared/types.js';
 import { TERMINAL_INTERVALS } from '../../../shared/types.js';
-import { fetchAggTrades, fetchKlines, fetchSpotDepth, type AggTrade, type SpotDepth } from '../data/binance.js';
+import {
+  fetchAggTrades, fetchKlines, fetchKlinesRange, fetchSpotDepth, klineStepMs,
+  type AggTrade, type SpotDepth,
+} from '../data/binance.js';
 import { TERMINAL } from '../config.js';
 
 const SYMBOL_RE = /^[A-Z0-9]{2,20}USDT$/;
@@ -139,4 +142,27 @@ export async function terminalCandles(
     TERMINAL.CHART_TTL_MS,
   );
   return { symbol, interval, asOf: Date.now(), candles };
+}
+
+/**
+ * Long 1m (or any interval) history for the volume-profile view: up to 12,000
+ * candles (~8.3 days at 1m), walked backwards from now in 1000-candle pages.
+ *
+ * The walk is capped at 12 pages for 12,000 candles; the page cap exists so a
+ * caller cannot accidentally make the engine download weeks of history in one
+ * request. Binance truncates `limit > 1000` silently, so paging is the only
+ * safe route to a long series.
+ */
+export async function terminalKlinesLong(
+  symbol: string,
+  interval: TerminalInterval,
+  limit: number = TERMINAL.VOLPROFILE_MAX_CANDLES,
+): Promise<TerminalCandles> {
+  const safeLimit = Math.min(TERMINAL.VOLPROFILE_MAX_CANDLES, Math.max(20, Math.round(limit)));
+  const step = klineStepMs(interval);
+  const now = Date.now();
+  const from = now - safeLimit * step;
+  const pages = Math.ceil(safeLimit / 1000) + 1;
+  const candles = await fetchKlinesRange(symbol, interval, from, now, 'normal', pages);
+  return { symbol, interval, asOf: Date.now(), candles: candles.slice(-safeLimit) };
 }

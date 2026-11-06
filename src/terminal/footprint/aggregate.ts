@@ -331,7 +331,15 @@ export function aggregateTrades(
   };
   if (!trades.length || !(opts.rowSize > 0) || !(opts.baseTick > 0)) return empty;
 
-  const sorted = [...trades].sort((a, b) => a.t - b.t || a.id - b.id);
+  let sorted: readonly TerminalTrade[] = trades;
+  for (let i = 1; i < trades.length; i++) {
+    const previous = trades[i - 1];
+    const current = trades[i];
+    if (current.t < previous.t || (current.t === previous.t && current.id < previous.id)) {
+      sorted = [...trades].sort((a, b) => a.t - b.t || a.id - b.id);
+      break;
+    }
+  }
   const buckets = new Map<number, CandleAccum>();
 
   for (const trade of sorted) {

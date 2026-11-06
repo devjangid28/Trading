@@ -69,8 +69,6 @@ export function DecisionRail({
         <button type="button" className="rail-collapsed" onClick={onOpen} title="Show the Decision panel and DOM (P)">
           <span className="rail-open" aria-hidden>{'\u2922'}</span>
           <span className={`rail-signal is-${signalClass}`}>{signal}</span>
-          <span className="rail-title">DECISION &amp; DOM</span>
-          <span className="rail-key">P</span>
         </button>
       ) : (
         <div className="rail-panel">

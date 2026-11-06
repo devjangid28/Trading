@@ -1,6 +1,7 @@
 import type {
   Candle, TerminalBook, TerminalBookLevel, TerminalHistoryFrame, TerminalInterval, TerminalTrade,
 } from '../../shared/types';
+import { PULL_DROP_RATIO } from './settings';
 
 export interface BookLattice {
   binBps: number;
@@ -429,13 +430,31 @@ export function pullEvents(
 
   for (const frame of live) {
     const seen = new Set<string>();
+    const from = prev?.asOf ?? frame.asOf;
     for (const side of ['bid', 'ask'] as const) {
       for (const level of side === 'bid' ? frame.bids : frame.asks) {
         const key = `${side}:${level.price}`;
         seen.add(key);
         const state = active.get(key);
-        if (state) state.usd = level.usd;
-        else active.set(key, { start: frame.asOf, usd: level.usd, price: level.price, side });
+        if (!state) {
+          active.set(key, { start: frame.asOf, usd: level.usd, price: level.price, side });
+          continue;
+        }
+        const collapsed = state.usd > 0 && level.usd <= state.usd * (1 - PULL_DROP_RATIO);
+        if (collapsed) {
+          const quiet = !tradedBetween(byPrice, level.price, from, frame.asOf);
+          if (quiet && state.usd >= minUsd) {
+            out.push({
+              t: frame.asOf,
+              price: level.price,
+              side,
+              usd: state.usd,
+              standingMs: Math.max(0, frame.asOf - state.start),
+            });
+          }
+          state.start = frame.asOf;
+        }
+        state.usd = level.usd;
       }
     }
     if (prev) {
@@ -480,12 +499,8 @@ export function snapPrice(price: number, quantum: number): number {
 }
 export function humanizeDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '0s';
-  if (ms < 1_000) return 'under 1s';
   if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
-  const mins = Math.floor(ms / 60_000);
-  const secs = Math.round((ms % 60_000) / 1_000);
-  if (secs === 0 || secs === 60) return `${mins} min`;
-  return `${mins}m ${secs}s`;
+  return `${Math.max(1, Math.round(ms / 60_000))} min`;
 }
 
 export const fmtDuration = humanizeDuration;

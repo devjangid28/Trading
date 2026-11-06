@@ -23,6 +23,7 @@ export const DEFAULT_CHART_SETTINGS: ChartSettings = {
   sessions: { london: true, newyork: true },
   sidebarOpen: true,
   sidebarTab: 'whales',
+  alertOnSecondaryBreaks: true,
 };
 
 export function indicatorCatalog(kind: IndicatorKind) {
@@ -101,6 +102,7 @@ export function sanitizeChartSettings(raw: unknown): ChartSettings {
     },
     sidebarOpen: bool(value.sidebarOpen, DEFAULT_CHART_SETTINGS.sidebarOpen),
     sidebarTab: oneOf(value.sidebarTab, SIDEBAR_TABS.map((entry) => entry.id), DEFAULT_CHART_SETTINGS.sidebarTab as SidebarTab),
+    alertOnSecondaryBreaks: bool(value.alertOnSecondaryBreaks, DEFAULT_CHART_SETTINGS.alertOnSecondaryBreaks),
   };
 }
 

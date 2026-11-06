@@ -23,6 +23,19 @@ export interface BinanceTrade {
   side: 'buy' | 'sell';
 }
 
+export interface BinanceAggTrade {
+  /** Aggregate trade id — the id used by both the REST and the WS feed. */
+  id: number;
+  t: number;
+  price: number;
+  qty: number;
+  side: 'buy' | 'sell';
+  /** First raw trade id inside this aggregate. */
+  firstId: number;
+  /** Last raw trade id inside this aggregate. */
+  lastId: number;
+}
+
 export interface BinanceBookTicker {
   bid: number;
   ask: number;
@@ -32,6 +45,7 @@ export interface BinanceBookTicker {
 export interface StreamHandlers {
   onKline: (candle: Candle) => void;
   onTrade?: (trade: BinanceTrade) => void;
+  onAggTrade?: (trade: BinanceAggTrade) => void;
   onBookTicker?: (ticker: BinanceBookTicker) => void;
   onStatus: (status: 'connecting' | 'live' | 'reconnecting' | 'offline' | 'error') => void;
   onLatency?: (ms: number) => void;
@@ -126,6 +140,27 @@ export function parseTrade(raw: unknown): BinanceTrade | null {
   };
 }
 
+export function parseAggTrade(raw: unknown): BinanceAggTrade | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const id = finite(value.a);
+  const t = finite(value.T);
+  const price = finite(value.p);
+  const qty = finite(value.q);
+  const firstId = finite(value.f);
+  const lastId = finite(value.l);
+  if (id === null || t === null || price === null || qty === null || firstId === null || lastId === null) return null;
+  return {
+    id,
+    t,
+    price,
+    qty,
+    side: value.m === true ? 'sell' : 'buy',
+    firstId,
+    lastId,
+  };
+}
+
 export function parseBookTicker(raw: unknown): BinanceBookTicker | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
@@ -204,6 +239,54 @@ export async function fetchKlines(
   return [...byTime.values()].sort((a, b) => a.t - b.t).slice(-wanted);
 }
 
+function aggTradesUrl(
+  symbol: string,
+  opts: { startTime?: number; endTime?: number; fromId?: number; limit?: number },
+): string {
+  const query = new URLSearchParams({ symbol: symbol.toUpperCase() });
+  if (opts.startTime !== undefined) query.set('startTime', String(opts.startTime));
+  if (opts.endTime !== undefined) query.set('endTime', String(opts.endTime));
+  if (opts.fromId !== undefined) query.set('fromId', String(opts.fromId));
+  query.set('limit', String(Math.max(1, Math.min(1000, opts.limit ?? 1000))));
+  return `${BINANCE_REST_BASE}/api/v3/aggTrades?${query.toString()}`;
+}
+
+/**
+ * Fetch aggregate trades (the same id space the `@aggTrade` WS stream uses)
+ * over a time window, paginating forward with `fromId`. The server caps each
+ * page at 1000; we keep paging until the window or a page cap is reached.
+ */
+export async function fetchAggTrades(
+  symbol: string,
+  opts: { startTime?: number; endTime?: number; limit?: number; signal?: AbortSignal } = {},
+): Promise<BinanceAggTrade[]> {
+  const endTime = opts.endTime ?? Date.now();
+  const startTime = opts.startTime ?? endTime - 2 * 3_600_000;
+  const pageLimit = Math.min(1000, opts.limit ?? 1000);
+  const out: BinanceAggTrade[] = [];
+  let fromId: number | undefined;
+  let guard = 0;
+
+  for (;;) {
+    if (guard++ >= 24 || fromId !== undefined && out.length >= pageLimit) break;
+    const url = aggTradesUrl(symbol, { startTime, endTime, fromId, limit: 1000 });
+    const body = await readJson(url, opts.signal);
+    if (!Array.isArray(body)) throw new Error('Binance returned an unexpected aggTrades payload');
+    const parsed = body
+      .map((row) => parseAggTrade(row))
+      .filter((row): row is BinanceAggTrade => row !== null);
+    if (parsed.length === 0) break;
+    out.push(...parsed);
+    const lastId = parsed[parsed.length - 1].id;
+    if (parsed.length < 1000 || lastId >= Number.MAX_SAFE_INTEGER) break;
+    fromId = lastId + 1;
+  }
+
+  const byId = new Map<number, BinanceAggTrade>();
+  for (const trade of out) byId.set(trade.id, trade);
+  return [...byId.values()].sort((a, b) => a.id - b.id);
+}
+
 export async function fetchTicker24h(
   symbol: string,
   signal?: AbortSignal,
@@ -220,11 +303,12 @@ export function subscribeMarketStream(
   symbol: string,
   interval: TerminalInterval,
   handlers: StreamHandlers,
+  opts?: { aggTrade?: boolean },
 ): () => void {
   const symbolLower = symbol.toLowerCase();
   const streams = [
     `${symbolLower}@kline_${interval}`,
-    `${symbolLower}@trade`,
+    opts?.aggTrade ? `${symbolLower}@aggTrade` : `${symbolLower}@trade`,
     `${symbolLower}@bookTicker`,
   ].join('/');
   let socket: WebSocket | null = null;
@@ -275,6 +359,13 @@ export function subscribeMarketStream(
         const kline = (data as { k?: unknown } | null)?.k;
         const candle = parseWsKline(kline);
         if (candle) handlers.onKline(candle);
+        const eventTime = finite((data as { E?: unknown } | null)?.E);
+        if (eventTime !== null) handlers.onLatency?.(Math.max(0, Date.now() - eventTime));
+        return;
+      }
+      if (stream.endsWith('@aggTrade')) {
+        const trade = parseAggTrade(data);
+        if (trade) handlers.onAggTrade?.(trade);
         const eventTime = finite((data as { E?: unknown } | null)?.E);
         if (eventTime !== null) handlers.onLatency?.(Math.max(0, Date.now() - eventTime));
         return;

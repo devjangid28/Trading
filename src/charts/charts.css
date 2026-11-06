@@ -1289,3 +1289,376 @@
     font-size: 8px;
   }
 }
+
+.charts-sr-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.charts-sr-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+  border: 1px solid var(--charts-line);
+  border-radius: 4px;
+  background: #0c141d;
+}
+
+.charts-sr-label {
+  color: var(--charts-faint);
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.charts-sr-value {
+  color: var(--charts-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.charts-sr-level {
+  display: grid;
+  gap: 2px;
+  padding: 5px 6px;
+  border: 1px solid var(--charts-line);
+  border-radius: 4px;
+  background: #0c141d;
+}
+
+.charts-sr-level.is-resistance {
+  border-left: 2px solid #f6465d;
+}
+
+.charts-sr-level.is-support {
+  border-left: 2px solid #0ecb81;
+}
+
+.charts-sr-level > .charts-sr-label {
+  color: var(--charts-dim);
+  font-size: 9px;
+}
+
+.charts-sr-dist {
+  color: var(--charts-faint);
+  font-size: 8px;
+}
+
+.charts-sr-dist.low { color: #0ecb81; }
+.charts-sr-dist.medium { color: #f0b90b; }
+.charts-sr-dist.high { color: #f6465d; }
+.charts-sr-dist.critical { color: #ff3333; }
+
+.charts-sr-prob {
+  color: var(--charts-faint);
+  font-size: 8px;
+  font-weight: 600;
+}
+
+.charts-sr-prob.low { color: #0ecb81; }
+.charts-sr-prob.medium { color: #f0b90b; }
+.charts-sr-prob.high { color: #f6465d; }
+.charts-sr-prob.critical { color: #ff3333; }
+
+.charts-sr-list {
+  display: grid;
+  gap: 1px;
+  background: var(--charts-line);
+}
+
+.charts-sr-row {
+  display: grid;
+  gap: 2px;
+  padding: 5px 6px;
+  background: #0c141d;
+  font-size: 8.5px;
+}
+
+.charts-sr-row.is-strong,
+.charts-sr-row.is-major {
+  border-left: 2px solid #f0b90b;
+}
+
+.charts-sr-row.is-moderate {
+  border-left: 2px solid #55c8ee;
+}
+
+.charts-sr-row.is-weak {
+  border-left: 2px solid var(--charts-faint);
+}
+
+.charts-sr-row.is-bullish {
+  border-left: 2px solid #0ecb81;
+}
+
+.charts-sr-row.is-bearish {
+  border-left: 2px solid #f6465d;
+}
+
+.charts-sr-row.is-rejection {
+  border-left: 2px solid #0ecb81;
+}
+
+.charts-sr-row.is-exhaustion {
+  border-left: 2px solid #f0b90b;
+}
+
+.charts-sr-row.is-liquidity {
+  border-left: 2px solid #facc15;
+}
+
+.charts-sr-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.charts-sr-price {
+  color: var(--charts-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+}
+
+.charts-sr-range {
+  color: var(--charts-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+}
+
+.charts-sr-strength {
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.charts-sr-strength.major { background: rgba(250, 204, 21, 0.15); color: #facc15; }
+.charts-sr-strength.strong { background: rgba(85, 200, 238, 0.15); color: #55c8ee; }
+.charts-sr-strength.moderate { background: rgba(145, 162, 180, 0.12); color: var(--charts-dim); }
+.charts-sr-strength.weak { background: rgba(107, 122, 144, 0.1); color: var(--charts-faint); }
+.charts-sr-strength.is-liquidity { background: rgba(250, 204, 21, 0.14); color: #facc15; }
+
+.charts-sr-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--charts-faint);
+  font-size: 7.5px;
+}
+
+.charts-sr-tested {
+  color: #f6465d;
+  font-weight: 600;
+}
+
+.charts-sr-untested {
+  color: #0ecb81;
+  font-weight: 700;
+}
+
+.charts-sr-break {
+  font-weight: 700;
+}
+
+.charts-sr-break.low { color: #0ecb81; }
+.charts-sr-break.medium { color: #f0b90b; }
+.charts-sr-break.high { color: #f6465d; }
+.charts-sr-break.critical { color: #ff3333; }
+
+.charts-sr-panel {
+  position: absolute;
+  top: 44px;
+  left: 11px;
+  z-index: 5;
+  min-width: 240px;
+  max-width: 340px;
+  padding: 7px 9px;
+  border: 1px solid rgba(28, 40, 54, 0.85);
+  border-radius: 6px;
+  background: rgba(7, 11, 16, 0.82);
+  color: var(--charts-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+}
+
+.charts-sr-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--charts-line);
+}
+
+.charts-sr-panel-title {
+  color: var(--charts-amber);
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.charts-sr-panel-live {
+  color: #0ecb81;
+  font-size: 7.5px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.charts-sr-panel-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.charts-sr-panel-cell {
+  display: grid;
+  gap: 2px;
+  padding: 5px 6px;
+  border: 1px solid var(--charts-line);
+  border-radius: 4px;
+  background: #0c141d;
+}
+
+.charts-sr-panel-cell.is-resistance {
+  border-left: 2px solid #f6465d;
+}
+
+.charts-sr-panel-cell.is-support {
+  border-left: 2px solid #0ecb81;
+}
+
+.charts-sr-panel-label {
+  color: var(--charts-faint);
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.charts-sr-panel-price {
+  color: var(--charts-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.charts-sr-panel-cell.is-resistance .charts-sr-panel-price {
+  color: #f6465d;
+}
+
+.charts-sr-panel-cell.is-support .charts-sr-panel-price {
+  color: #0ecb81;
+}
+
+.charts-sr-panel-meta {
+  color: var(--charts-faint);
+  font-size: 7.5px;
+}
+
+.charts-sr-break-banner {
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 6px 7px;
+  border: 1px solid var(--charts-line);
+  border-radius: 4px;
+  font-size: 8px;
+}
+
+.charts-sr-break-banner.is-strong {
+  border-color: rgba(246, 70, 93, 0.5);
+  background: rgba(246, 70, 93, 0.12);
+}
+
+.charts-sr-break-banner.is-medium {
+  border-color: rgba(244, 184, 96, 0.45);
+  background: rgba(244, 184, 96, 0.1);
+}
+
+.charts-sr-break-banner.is-weak {
+  border-color: rgba(107, 122, 144, 0.4);
+  background: rgba(107, 122, 144, 0.08);
+}
+
+.charts-sr-break-banner-tag {
+  color: var(--charts-text);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.charts-sr-break-banner-reason {
+  color: var(--charts-dim);
+}
+
+.charts-sr-hm {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--charts-line);
+}
+
+.charts-sr-hm.is-live {
+  color: #0ecb81;
+}
+
+.charts-sr-hm.is-fallback {
+  color: var(--charts-amber);
+}
+
+.charts-sr-hm.is-offline {
+  color: var(--charts-faint);
+}
+
+.charts-sr-secondary-breaks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 5px;
+}
+
+.charts-sr-secondary-break {
+  font-size: 7.5px;
+  color: var(--charts-dim);
+  border: 1px solid rgba(107, 122, 144, 0.35);
+  background: rgba(107, 122, 144, 0.08);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+
+.charts-sr-secondary-break.is-weak {
+  opacity: 0.55;
+}
+
+.charts-sidebar-card-head-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.charts-sr-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--charts-line);
+  font-size: 10px;
+  color: var(--charts-dim);
+  cursor: pointer;
+}
+
+.charts-sr-toggle input {
+  accent-color: #f0b90b;
+  cursor: pointer;
+}
+
+.charts-sr-level.is-secondary {
+  opacity: 0.7;
+  filter: saturate(0.7);
+}

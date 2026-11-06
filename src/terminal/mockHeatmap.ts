@@ -99,17 +99,22 @@ export function buildMockHeatmap(symbol: string, anchorMid = 0, now = Date.now()
   // auto tape threshold near the reference's $5.5K without inventing giant fills.
   for (let i = 0; i < 45; i++) {
     const u = (i + 0.35) / 45;
-    const t = tradeStart + u * (MOCK_SPAN_MS - 8_000);
-    const price = pathPrice(mid, u) + (random() - 0.5) * priceStep * 2;
+    const t = tradeStart + u * (MOCK_SPAN_MS - 8_000) + (random() - 0.5) * 36_000;
+    const price = pathPrice(mid, u) + (random() - 0.5) * priceStep * 120;
     const scale = i === 12 || i === 21 || i === 31 ? 2.4 : 1;
     const rising = u < 0.28 || u >= 0.66;
     pushTrade(t, price, (90_000 + random() * 260_000) * scale, rising ? 'buy' : 'sell', 1 + Math.floor(random() * 9));
   }
+  // The dense small-print tail lives in the final five minutes. It keeps the
+  // Auto tape threshold near the reference's $5.5K without turning the older
+  // step bubbles into thousands of dots.
+  const smallStart = now - 5 * 60_000;
   for (let i = 0; i < 1_800; i++) {
     const u = (i + 0.2) / 1_800;
-    const t = tradeStart + u * (MOCK_SPAN_MS - 5_000);
-    const price = pathPrice(mid, u) + (random() - 0.5) * priceStep * 3;
-    const rising = u < 0.28 || u >= 0.66;
+    const t = smallStart + u * (5 * 60_000 - 5_000);
+    const pathU = (t - tradeStart) / MOCK_SPAN_MS;
+    const price = pathPrice(mid, pathU) + (random() - 0.5) * priceStep * 3;
+    const rising = pathU < 0.28 || pathU >= 0.66;
     pushTrade(t, price, 500 + random() * 5_500, rising ? 'buy' : 'sell', 1 + Math.floor(random() * 4));
   }
   trades.sort((a, b) => a.t - b.t || a.id - b.id);
@@ -123,30 +128,30 @@ export function buildMockHeatmap(symbol: string, anchorMid = 0, now = Date.now()
 
   const bidWallSince = MOCK_RECORD_MS - 39_000;
   const bidSpecs: LevelSpec[] = [
-    { price: round(mid - 11 * priceStep), usd: 262_900, since: bidWallSince },
+    { price: mid >= 1_000 ? 80_568 : round(mid - 11 * priceStep), usd: 262_900, since: bidWallSince },
     { price: round(mid - 31 * priceStep), usd: 198_400, since: 0 },
     { price: round(mid - 55 * priceStep), usd: 154_300, since: 0 },
     { price: round(mid - 15 * priceStep), usd: 210_000, since: 0, until: MOCK_RECORD_MS - 20_000 },
     { price: round(mid - 44 * priceStep), usd: 186_000, since: MOCK_RECORD_MS - 10_000 },
   ];
   const askSpecs: LevelSpec[] = [
-    { price: round(mid + 8 * priceStep), usd: 343_700, since: MOCK_RECORD_MS - 2_000 },
+    { price: mid > 50_000 ? 80_599.5 : round(mid + 8 * priceStep), usd: 343_700, since: MOCK_RECORD_MS - 2_000 },
     { price: round(mid + 33 * priceStep), usd: 250_000, since: 0 },
     { price: round(mid + 57 * priceStep), usd: 176_500, since: 0 },
     { price: round(mid + 22 * priceStep), usd: 403_000, since: 0, until: MOCK_RECORD_MS - 20_000 },
   ];
   for (let pull = 0; pull < 6; pull++) {
     askSpecs.push({
-      price: round(mid + (15 + pull) * priceStep),
+      price: round(mid + (9 + pull * 1.2) * priceStep),
       usd: 165_000 + pull * 6_000,
       since: 0,
-      until: MOCK_RECORD_MS - (24_000 + pull * 9_000),
+      until: MOCK_RECORD_MS - (24_000 + pull * 7_000),
     });
   }
 
   const controlled = new Set([...bidSpecs, ...askSpecs].map((spec) => spec.price));
   const grid: number[] = [];
-  for (let level = -360; level <= 360; level++) grid.push(round(mid + level * priceStep));
+  for (let level = -360; level <= 360; level += 4) grid.push(round(mid + level * priceStep));
   const times: number[] = [];
   for (let elapsed = 0; elapsed <= MOCK_RECORD_MS; elapsed += 2_000) times.push(elapsed);
   if (!times.includes(bidWallSince)) times.push(bidWallSince);

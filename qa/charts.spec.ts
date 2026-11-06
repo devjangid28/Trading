@@ -1,5 +1,72 @@
 import { expect, test, type Page } from '@playwright/test';
 
+/**
+ * The S/R engine renders a status panel on the chart and a full S/R Engine tab
+ * in the sidebar. The engine may be working on live candles (which can be
+ * empty or errored offline), so the assertions pin the honesty contract: the
+ * panel exists, never fabricates a number (dash when there is no level), and
+ * re-mounts with the selected timeframe after a switch.
+ */
+test('S/R engine panel and sidebar tab render honest levels', async ({ page }, testInfo) => {
+  await page.goto('/?tab=charts');
+  await expect(page.locator('.charts-shell')).toBeVisible();
+
+  const panel = page.locator('.charts-sr-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel.locator('.charts-sr-panel-title')).toHaveText('S/R ENGINE');
+  await expect(panel.locator('.charts-sr-panel-live')).toHaveText('LIVE');
+  await expect(panel.locator('.charts-sr-hm')).toBeVisible();
+  await expect(panel.locator('.charts-sr-hm')).toHaveText(/^HM (LIVE|FALLBACK|OFFLINE)$/);
+
+  // Wait for either candles or a terminal empty/error state so the panel has
+  // settled on the engine's answer before we read it.
+  await expect
+    .poll(async () => {
+      const els = await page.locator('.charts-canvas canvas, .charts-overlay').count();
+      return els;
+    }, { timeout: 20_000 })
+    .toBeGreaterThan(0);
+
+  const cellText = async (cell: ReturnType<typeof page.locator>) => {
+    const text = await cell.innerText();
+    const hasPrice = /\d/.test(text);
+    const hasBreak = text.includes('% break');
+    if (hasPrice && !hasBreak) return 'pending';
+    return text;
+  };
+  const resistance = panel.locator('.charts-sr-panel-cell.is-resistance');
+  const support = panel.locator('.charts-sr-panel-cell.is-support');
+  await expect.poll(async () => cellText(resistance), { timeout: 20_000 }).not.toBe('pending');
+  await expect.poll(async () => cellText(support), { timeout: 20_000 }).not.toBe('pending');
+
+  // Sidebar: open the S/R Engine tab.
+  await page.getByRole('tab', { name: 'S/R Engine' }).click();
+  await expect(page.getByRole('tab', { name: 'S/R Engine' })).toHaveAttribute('aria-selected', 'true');
+  const stack = page.locator('.charts-sidebar-stack').first();
+  await expect(stack).toBeVisible();
+  await expect(stack.locator('.charts-sidebar-card-head').first()).toContainText('S/R ENGINE');
+  await expect(stack.locator('.charts-sr-hm')).toBeVisible();
+  await expect(stack.locator('.charts-sr-hm')).toHaveText(/^HM (LIVE|FALLBACK|OFFLINE)$/);
+
+  const secondaryToggle = stack.getByRole('checkbox', { name: 'Alert on secondary break' });
+  await expect(secondaryToggle).toBeChecked();
+  await secondaryToggle.uncheck();
+  await expect(secondaryToggle).not.toBeChecked();
+  await secondaryToggle.check();
+  await expect(secondaryToggle).toBeChecked();
+
+  // Switch timeframe; the engine must recompute and the sidebar header must
+  // reflect the switch. (Click, not the keyboard shortcut: focus sits on the
+  // toggle we just used, and the shortcut ignores inputs.)
+  await page.locator('.charts-timeframe').filter({ hasText: '1m' }).first().click();
+  await expect(page.locator('.charts-timeframe.is-active')).toHaveText('1m');
+  await expect(stack.locator('.charts-sidebar-card-head').first()).toContainText('1m', { timeout: 20_000 });
+
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForTimeout(1_500);
+  await page.screenshot({ path: `qa/screens/charts-03-sr-${testInfo.project.name}.png` });
+});
+
 async function overlayState(page: Page) {
   return page.evaluate(() => {
     const w = window as unknown as {

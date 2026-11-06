@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
-  Candle, LiqEvent, TerminalBook, TerminalInterval, TerminalTrade,
+  Candle, LiqEvent, TerminalBook, TerminalInterval, TerminalSpan, TerminalTrade,
 } from '../../shared/types';
 import type { BookFrame, PullEvent } from './math';
 import { INTERVAL_MS, nearestWalls, priceDecimals, pullEvents, snapPrice } from './math';
 import type { BubblePoint, CellHit } from './heatmap';
 import {
-  bubblePoints, bubbleRadius, cellAt, clampNumber, frameAt, frameRowTotals, heatColor,
-  localClock, nicePriceTicks, percentile, plainPrice, priceToY, rowCountFor, rowIndexForPrice,
-  SPAN_MS, sparseIntensity, sparseThresholds, stepMsFor, timeToX, tooltipPosition,
-  volumeBuckets, wallAt, xToTime, yToPrice,
+  bubblePoints, bubbleRadius, cellAt, clampNumber, contrastFloor, frameAt, frameRowTotals,
+  heatColor, humanizeDuration, localClock, nicePriceTicks, percentile, plainPrice, priceToY,
+  rowCountFor, rowIndexForPrice, SPAN_MS, sparseIntensity, sparseThresholds, stepMsFor, timeToX,
+  tooltipPosition, volumeBuckets, wallAt, xToTime, yToPrice,
 } from './heatmap';
 import type { HeatmapSettings } from './settings';
 import {
-  BUBBLE_FLOOR_PCT, BUBBLE_FLOOR_USD, BUBBLE_SCALE, MIN_WALL_USD, RANGE_PCT, WALL_NEAR_PCT,
+  BUBBLE_FLOOR_PCT, BUBBLE_FLOOR_USD, BUBBLE_LABEL_USD, BUBBLE_SCALE, LIQ_EVENT_USD,
+  LIQ_EVENT_WINDOW_MS, MAX_BUBBLES, MIN_WALL_USD, RANGE_PCT, WALL_LABEL_COUNT,
+  WALL_LABEL_FONT_PX, WALL_NEAR_PCT,
 } from './settings';
 import type { GexSnapshot, LevelLine, PlanContext } from './levels';
 import {
@@ -28,7 +30,7 @@ const AXIS_W_SMALL = 76;
 const HEADER_H = 36;
 const MIN_AUTO_SPAN_PCT = 0.00018;
 const WALL_MARGIN = 95;
-const TOOLTIP_W = 300;
+const TOOLTIP_W = 340;
 
 interface Geometry {
   w: number;
@@ -98,6 +100,7 @@ interface HoverState {
   cell: CellHit | null;
   bubble: BubblePoint | null;
   pull: PullEvent | null;
+  add: LiquidityAdd | null;
   columnKey: string | null;
   columnLow: number | null;
   columnHigh: number | null;
@@ -126,6 +129,9 @@ interface LiquidityAdd {
 }
 
 function chooseTimeStep(spanMs: number, width: number): number {
+  // The reference labels the 15-minute view every two minutes regardless of
+  // the available width; wider spans step up from there.
+  if (spanMs <= 20 * 60_000) return 2 * 60_000;
   const candidates = [
     1_000, 5_000, 15_000, 30_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000,
     15 * 60_000, 30 * 60_000, 60 * 60_000, 2 * 3_600_000, 4 * 3_600_000,
@@ -139,6 +145,19 @@ function chooseTimeStep(spanMs: number, width: number): number {
 
 function tickLabel(t: number): string {
   return localClock(t, false);
+}
+
+function bookCadenceLabel(span: TerminalSpan): string {
+  switch (span) {
+    case '12m': return '0.5-second';
+    case '1m':
+    case '2m':
+    case '5m': return '1-second';
+    case '15m':
+    case '30m':
+    case '1h': return '2-second';
+    default: return '1-minute';
+  }
 }
 
 function niceRange(
@@ -216,15 +235,15 @@ function prepare(canvas: HTMLCanvasElement, w: number, h: number): CanvasRenderi
 function drawChevron(ctx: CanvasRenderingContext2D, x: number, y: number, up: boolean, color: string): void {
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = 2;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   for (let i = 0; i < 2; i++) {
     const dy = up ? i * 4 : -i * 4;
     ctx.beginPath();
-    ctx.moveTo(x - 5, y + dy + (up ? 3 : -3));
+    ctx.moveTo(x - 6, y + dy + (up ? 3 : -3));
     ctx.lineTo(x, y + dy);
-    ctx.lineTo(x + 5, y + dy + (up ? 3 : -3));
+    ctx.lineTo(x + 6, y + dy + (up ? 3 : -3));
     ctx.stroke();
   }
   ctx.restore();
@@ -240,26 +259,11 @@ function drawWallBadge(
   x: number,
   y: number,
 ): void {
-  const color = wall.side === 'bid' ? '#4ade80' : '#f87171';
-  const text = formatWallUsd(wall.usd);
-  const width = ctx.measureText(text).width + 8;
-  ctx.fillStyle = 'rgba(5,7,13,0.74)';
-  roundedRect(ctx, x - width, y - 7, width, 14, 3);
-  ctx.fill();
-  ctx.textAlign = 'left';
+  ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = color;
-  ctx.fillText(text, x - width + 4, y);
+  ctx.fillStyle = wall.side === 'bid' ? '#4ade80' : '#f87171';
+  ctx.fillText(formatWallUsd(wall.usd), x, y);
   ctx.textBaseline = 'alphabetic';
-}
-
-function standingText(ms: number): string {
-  if (ms < 1_000) return 'under 1s';
-  if (ms < 60_000) return `${Math.round(ms / 1_000)}s`;
-  const mins = Math.floor(ms / 60_000);
-  const secs = Math.round((ms % 60_000) / 1_000);
-  if (secs === 0) return `${mins} min`;
-  return `${mins}m ${secs}s`;
 }
 
 function nearestTick(value: number, ticks: readonly number[]): number {
@@ -300,14 +304,14 @@ function drawTooltip(
   walls: ReturnType<typeof nearestWalls>,
   g: Geometry,
 ): void {
-  const bodyW = TOOLTIP_W - 20;
+  const bodyW = TOOLTIP_W - 24;
   const lines: TipLine[] = [];
   const push = (text: string, color: string, font: string) => {
     ctx.font = font;
     for (const line of wrapText(ctx, text, bodyW)) lines.push({ text: line, color, font });
   };
-  const mono = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
-  const bold = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+  const mono = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
+  const bold = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
   const muted = '#8b93a1';
 
   if (hover.bubble) {
@@ -326,11 +330,18 @@ function drawTooltip(
     );
   } else if (hover.pull) {
     push(
-      `${hover.pull.side} pulled \u00b7 ${fmtUsd(hover.pull.usd)} \u00b7 stood ${standingText(hover.pull.standingMs)}`,
+      `${hover.pull.side === 'bid' ? 'BID' : 'ASK'} pulled \u00b7 ${fmtUsd(hover.pull.usd)} \u00b7 stood ${humanizeDuration(hover.pull.standingMs)}`,
       hover.pull.side === 'bid' ? '#86efac' : '#fca5a5',
       bold,
     );
     push('No trade at this price between snapshots \u2014 a cancel, not a fill.', muted, mono);
+  } else if (hover.add) {
+    push(
+      `ADDED ${fmtUsd(hover.add.usd)} \u00b7 ${hover.add.side === 'bid' ? 'BID' : 'ASK'} \u00b7 ${priceText(hover.add.price, priceMin)} \u00b7 ${localClock(hover.add.t)}`,
+      hover.add.side === 'bid' ? '#86efac' : '#fca5a5',
+      bold,
+    );
+    push('New resting size appeared between snapshots.', muted, mono);
   } else if (hover.cell) {
     const cell = hover.cell;
     push(
@@ -358,15 +369,15 @@ function drawTooltip(
     push('Column rows share the heatmap price scale.', muted, mono);
   }
 
-  const headH = 31;
-  const lineH = 15;
+  const headH = 34;
+  const lineH = 17;
   const height = headH + lines.length * lineH + 10;
   const tip = tooltipPosition(hover.x, hover.y, TOOLTIP_W, height, g.w, g.h, 14, 6);
   ctx.save();
-  roundedRect(ctx, tip.left, tip.top, TOOLTIP_W, height, 5);
-  ctx.fillStyle = 'rgba(9,12,20,0.97)';
+  roundedRect(ctx, tip.left, tip.top, TOOLTIP_W, height, 4);
+  ctx.fillStyle = '#0b0f17';
   ctx.fill();
-  ctx.strokeStyle = 'rgba(148,163,184,0.22)';
+  ctx.strokeStyle = '#2a3342';
   ctx.lineWidth = 1;
   ctx.stroke();
 
@@ -374,23 +385,23 @@ function drawTooltip(
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#e5e7eb';
-  ctx.fillText(priceText(hover.bubble?.price ?? hover.pull?.price ?? hover.price, priceMin), tip.left + 10, tip.top + 13);
+  ctx.fillText(priceText(hover.bubble?.price ?? hover.pull?.price ?? hover.add?.price ?? hover.price, priceMin), tip.left + 12, tip.top + 15);
   ctx.font = mono;
   ctx.textAlign = 'right';
   ctx.fillStyle = muted;
-  ctx.fillText(localClock(hover.bubble?.t ?? hover.pull?.t ?? hover.time), tip.left + TOOLTIP_W - 10, tip.top + 13);
+  ctx.fillText(localClock(hover.bubble?.t ?? hover.pull?.t ?? hover.add?.t ?? hover.time), tip.left + TOOLTIP_W - 12, tip.top + 15);
   ctx.strokeStyle = 'rgba(148,163,184,0.16)';
   ctx.beginPath();
-  ctx.moveTo(tip.left + 10, tip.top + headH - 1.5);
-  ctx.lineTo(tip.left + TOOLTIP_W - 10, tip.top + headH - 1.5);
+  ctx.moveTo(tip.left + 12, tip.top + headH - 1.5);
+  ctx.lineTo(tip.left + TOOLTIP_W - 12, tip.top + headH - 1.5);
   ctx.stroke();
 
   ctx.textAlign = 'left';
-  let y = tip.top + headH + 9;
+  let y = tip.top + headH + 10;
   for (const line of lines) {
     ctx.font = line.font;
     ctx.fillStyle = line.color;
-    ctx.fillText(line.text, tip.left + 10, y);
+    ctx.fillText(line.text, tip.left + 12, y);
     y += lineH;
   }
   ctx.textBaseline = 'alphabetic';
@@ -489,7 +500,8 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     const h = Math.max(1, size.h);
     const axisW = w < 720 ? AXIS_W_SMALL : AXIS_W;
     const maxCols = w < 560 ? 0 : w < 700 ? 2 : settings.columns.length;
-    const columns = settings.columns.slice(0, maxCols);
+    const preferred = w < 700 ? (['book', 'tape'] as HeatmapSettings['columns']) : settings.columns;
+    const columns = preferred.slice(0, maxCols);
     const colsW = columns.reduce((sum, key) => sum + columnWidth(key), 0);
     const plotRight = Math.max(80, w - axisW - colsW);
     const wallMargin = plotRight >= 560 ? WALL_MARGIN : 0;
@@ -524,38 +536,43 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     return () => ro.disconnect();
   }, []);
 
+  const bubbleScale = BUBBLE_SCALE[settings.bubbleSize];
+  const bubbleCandidates = useMemo(() => bubblePoints(
+    trades, start, end, settings.bubbles, settings.stepMode, 0,
+    priceMin, priceMax, geom.rows,
+  ), [trades, start, end, settings.bubbles, settings.stepMode, priceMin, priceMax, geom.rows]);
+
   const bubbleFloor = useMemo(() => {
     const fixed = BUBBLE_FLOOR_USD[settings.bubbleFloor];
     if (fixed !== undefined) return fixed;
     const pct = BUBBLE_FLOOR_PCT[settings.bubbleFloor];
     if (pct === undefined) return 0;
-    return percentile(shownTrades.map((trade) => trade.usd), pct);
-  }, [settings.bubbleFloor, shownTrades]);
-
-  const bubbleScale = BUBBLE_SCALE[settings.bubbleSize];
-
-  const allBubbles = useMemo(() => bubblePoints(
-    trades, start, end, settings.bubbles, settings.stepMode, bubbleFloor,
-    priceMin, priceMax, geom.rows,
-  ), [trades, start, end, settings.bubbles, settings.stepMode, bubbleFloor, priceMin, priceMax, geom.rows]);
+    return percentile(bubbleCandidates.map((bubble) => bubble.usd), pct);
+  }, [settings.bubbleFloor, bubbleCandidates]);
 
   const bubbles = useMemo(() => {
-    if (allBubbles.length <= 160) return allBubbles;
-    return [...allBubbles].sort((a, b) => b.usd - a.usd).slice(0, 160).sort((a, b) => a.t - b.t);
-  }, [allBubbles]);
+    const visible = bubbleCandidates.filter((bubble) => bubble.usd >= bubbleFloor);
+    if (visible.length <= MAX_BUBBLES) return visible;
+    return [...visible].sort((a, b) => b.usd - a.usd).slice(0, MAX_BUBBLES).sort((a, b) => a.t - b.t);
+  }, [bubbleCandidates, bubbleFloor]);
 
   const ringBubbles = useMemo(() => {
     const count = Math.max(1, Math.ceil(bubbles.length * 0.15));
     return new Set([...bubbles].sort((a, b) => b.usd - a.usd).slice(0, count));
   }, [bubbles]);
 
+  const stepBubbles = useMemo(
+    () => bubbles.filter((bubble) => bubble.aggregated).sort((a, b) => a.t - b.t),
+    [bubbles],
+  );
+
   const labelBubbles = useMemo(() => {
     const top = [...bubbles].sort((a, b) => b.usd - a.usd).slice(0, 12);
-    return new Set([...top, ...bubbles.filter((bubble) => bubble.usd >= 250_000)]);
+    return new Set([...top, ...bubbles.filter((bubble) => bubble.usd >= BUBBLE_LABEL_USD)]);
   }, [bubbles]);
 
   const pulls = useMemo(
-    () => pullEvents(frames, trades, Math.max(150_000, settings.minLiquidityUsd), 40),
+    () => pullEvents(frames, trades, Math.max(LIQ_EVENT_USD, settings.minLiquidityUsd), 40),
     [frames, trades, settings.minLiquidityUsd],
   );
 
@@ -576,7 +593,7 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       ]);
       for (const side of ['bid', 'ask'] as const) {
         for (const level of side === 'bid' ? live[i].bids : live[i].asks) {
-          if (seen.has(`${side}:${level.price}`) || level.usd < 150_000) continue;
+          if (seen.has(`${side}:${level.price}`) || level.usd < LIQ_EVENT_USD) continue;
           out.push({ t: live[i].asOf, price: level.price, usd: level.usd, side });
         }
       }
@@ -586,13 +603,17 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
 
   const walls = useMemo(() => nearestWalls(frames, WALL_NEAR_PCT, 24, MIN_WALL_USD), [frames]);
   const wallCandidates = useMemo(() => {
-    const latest = frames[frames.length - 1];
+    const latest = visibleFrame;
     if (!latest || !(latest.mid > 0)) return [];
-    const near = (price: number) => Math.abs(price - latest.mid) / latest.mid <= WALL_NEAR_PCT;
-    const bids = latest.bids.filter((level) => near(level.price) && level.usd >= MIN_WALL_USD).map((level) => ({ ...level, side: 'bid' as const }));
-    const asks = latest.asks.filter((level) => near(level.price) && level.usd >= MIN_WALL_USD).map((level) => ({ ...level, side: 'ask' as const }));
-    return [...bids, ...asks].sort((a, b) => b.usd - a.usd).slice(0, 6);
-  }, [frames]);
+    const inView = (price: number) => price >= priceMin && price <= priceMax;
+    const bids = latest.bids
+      .filter((level) => inView(level.price) && level.usd >= MIN_WALL_USD)
+      .map((level) => ({ ...level, side: 'bid' as const }));
+    const asks = latest.asks
+      .filter((level) => inView(level.price) && level.usd >= MIN_WALL_USD)
+      .map((level) => ({ ...level, side: 'ask' as const }));
+    return [...bids, ...asks].sort((a, b) => b.usd - a.usd).slice(0, WALL_LABEL_COUNT);
+  }, [visibleFrame, priceMin, priceMax]);
 
   const allLevels = useMemo(() => {
     const out: LevelLine[] = [];
@@ -622,10 +643,11 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     const timeStep = chooseTimeStep(spanMs, g.dataW);
     const firstTick = Math.ceil(start / timeStep) * timeStep;
 
+    const heatFloor = contrastFloor(thresholds, settings.contrast);
     const heatKey = [
       frames.length, frames[0]?.asOf ?? 0, frames[frames.length - 1]?.asOf ?? 0,
       start, end, priceMin, priceMax, g.rows, g.dataW, g.top, g.plotH,
-      settings.contrast, settings.minLiquidityUsd, thresholds.low, thresholds.max,
+      settings.contrast, heatFloor, settings.minLiquidityUsd, thresholds.low, thresholds.max,
     ].join(':');
     if (heatRef.current.key !== heatKey) {
       let heat = heatRef.current.canvas;
@@ -653,8 +675,7 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
           for (let row = 0; row < g.rows; row++) {
             const usd = (bid[row] ?? 0) + (ask[row] ?? 0);
             if (usd <= 0) continue;
-            const gain = settings.contrast === 'high' ? 1.12 : settings.contrast === 'low' ? 0.86 : 1;
-            const intensity = sparseIntensity(usd, thresholds, gain);
+            const intensity = sparseIntensity(usd, thresholds, 1, heatFloor);
             if (intensity <= 0) continue;
             hctx.fillStyle = heatColor(intensity, 1);
             const y = g.top + row * g.rowH;
@@ -670,9 +691,9 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     if (recordStart !== null && recordStart > start && recordStart < end) {
       const x = timeToX(recordStart, start, end, 0, g.dataW);
       ctx.save();
-      ctx.strokeStyle = 'rgba(244,184,96,0.78)';
+      ctx.strokeStyle = 'rgba(250,204,21,0.7)';
       ctx.lineWidth = 1;
-      ctx.setLineDash([3, 4]);
+      ctx.setLineDash([2, 4]);
       ctx.beginPath();
       ctx.moveTo(Math.round(x) + 0.5, g.top);
       ctx.lineTo(Math.round(x) + 0.5, g.plotBottom);
@@ -681,15 +702,11 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       const label = 'order book recorded from here \u25b8';
       ctx.font = '600 10px ui-monospace, SFMono-Regular, Menlo, monospace';
       const tw = ctx.measureText(label).width;
-      const lx = x + tw + 16 < g.dataW ? x + 7 : x - tw - 7;
-      const overlapsLegend = lx < 290 && lx + tw > 7;
-      const labelY = overlapsLegend ? g.plotBottom - 10 : g.top + 14;
-      ctx.fillStyle = 'rgba(5,7,13,0.70)';
-      ctx.fillRect(lx - 2, labelY - 7, tw + 4, 14);
-      ctx.fillStyle = '#f4b860';
+      const lx = Math.max(4, x - tw - 7);
+      ctx.fillStyle = '#facc15';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(label, lx, labelY);
+      ctx.fillText(label, lx, g.top + 14);
       ctx.restore();
       ctx.textBaseline = 'alphabetic';
     }
@@ -722,23 +739,8 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       }
     }
 
-    // Price path under the bubbles.
-    if (bubbles.length > 1) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.32)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let i = 0; i < bubbles.length; i++) {
-        const bubble = bubbles[i];
-        const x = timeToX(bubble.t, start, end, 0, g.dataW);
-        const y = priceToY(bubble.price, priceMin, priceMax, g.top, g.plotH);
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-
     if (settings.showVolume) {
-      const buckets = volumeBuckets(shownTrades, start, end, Math.max(20, Math.floor(g.dataW / 6)));
+      const buckets = volumeBuckets(shownTrades, start, end, Math.max(20, Math.floor(g.dataW / 8)));
       const maxVol = Math.max(1, ...buckets.map((bucket) => bucket.total));
       const bw = g.dataW / buckets.length;
       ctx.fillStyle = 'rgba(5,7,13,0.45)';
@@ -750,10 +752,11 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
         const x = i * bw;
         const buyH = (bucket.buy / bucket.total) * h;
         const sellH = h - buyH;
+        const barW = Math.max(4, bw - 2);
         ctx.fillStyle = 'rgba(34,197,94,0.78)';
-        ctx.fillRect(x + 0.5, g.timeTop - 2 - buyH, Math.max(1, bw - 1), buyH);
+        ctx.fillRect(x + 1, g.timeTop - 2 - buyH, barW, buyH);
         ctx.fillStyle = 'rgba(239,68,68,0.78)';
-        ctx.fillRect(x + 0.5, g.timeTop - 2 - buyH - sellH, Math.max(1, bw - 1), sellH);
+        ctx.fillRect(x + 1, g.timeTop - 2 - buyH - sellH, barW, sellH);
       }
     }
 
@@ -792,7 +795,7 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     ctx.moveTo(g.axisX + 0.5, 0);
     ctx.lineTo(g.axisX + 0.5, g.timeTop);
     ctx.stroke();
-    ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     for (const tick of ticks.values) {
@@ -815,20 +818,20 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       color: string,
       outline: boolean,
     ) => {
-      if (y < g.top + 4 || y > g.timeTop - 8) return;
-      if (tagYs.some((used) => Math.abs(used - y) < 13)) return;
+      if (y < g.top + 4 || y > g.timeTop - 12) return;
+      if (tagYs.some((used) => Math.abs(used - y) < 16)) return;
       tagYs.push(y);
-      ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
-      const width = Math.max(g.axisW - 6, ctx.measureText(text).width + 8);
+      ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+      const width = Math.max(82, Math.min(g.axisW - 4, ctx.measureText(text).width + 12));
       if (outline) {
         ctx.fillStyle = 'rgba(5,7,13,0.92)';
-        ctx.fillRect(g.axisX + 3, y - 8, width, 16);
+        ctx.fillRect(g.axisX + 3, y - 11, width, 22);
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
-        ctx.strokeRect(g.axisX + 3, y - 8, width, 16);
+        ctx.strokeRect(g.axisX + 3, y - 11, width, 22);
       } else {
         ctx.fillStyle = color;
-        roundedRect(ctx, g.axisX + 3, y - 8, width, 16, 3);
+        roundedRect(ctx, g.axisX + 3, y - 11, width, 22, 3);
         ctx.fill();
       }
       ctx.fillStyle = outline ? color : '#05070d';
@@ -840,13 +843,6 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
 
     if (currentPrice > 0) {
       drawTag(midY, priceText(currentPrice, priceMin), '#e5e7eb', false);
-      ctx.strokeStyle = 'rgba(229,231,235,0.5)';
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(0, midY + 0.5);
-      ctx.lineTo(g.dataRight, midY + 0.5);
-      ctx.stroke();
-      ctx.setLineDash([]);
     }
 
     const labelYs: number[] = [];
@@ -866,8 +862,10 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       if (!collides) {
         labelYs.push(y);
         const prefix = line.kind === 'user' ? (line.price >= currentPrice ? '\u25b2 ' : '\u25bc ') : '';
-        const label = `${prefix}${line.label}`;
-        ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+        const label = line.kind === 'user'
+          ? `${prefix}${line.label} ${priceText(line.price, priceMin)}`
+          : `${prefix}${line.label}`;
+        ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
         const tw = ctx.measureText(label).width;
         ctx.fillStyle = 'rgba(5,7,13,0.80)';
         roundedRect(ctx, 3, y - 8, tw + 6, 14, 2);
@@ -884,17 +882,37 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     }
 
     // Top wall labels in the right margin, red asks and green bids.
-    ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = `700 ${WALL_LABEL_FONT_PX}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     const wallYs: number[] = [];
     for (const wall of wallCandidates) {
       const y = priceToY(wall.price, priceMin, priceMax, g.top, g.plotH);
-      if (y < g.top + 6 || y > g.plotBottom - 6) continue;
-      if (wallYs.some((used) => Math.abs(used - y) < 12)) continue;
+      if (y < g.top + 8 || y > g.plotBottom - 8) continue;
+      if (wallYs.some((used) => Math.abs(used - y) < 15)) continue;
       wallYs.push(y);
-      drawWallBadge(ctx, wall, g.plotRight - 5, y);
+      drawWallBadge(ctx, wall, g.plotRight - 6, y);
     }
 
-    // Bubbles: saturated pies, notional diameter, path already underneath.
+    // Price path: a 1px grey line joining consecutive step-bubble centers,
+    // drawn under the bubbles.
+    if (stepBubbles.length > 1) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      let started = false;
+      for (const bubble of stepBubbles) {
+        const x = timeToX(bubble.t, start, end, 0, g.dataW);
+        const y = priceToY(bubble.price, priceMin, priceMax, g.top, g.plotH);
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+
+    // Bubbles: saturated pies, notional diameter.
     const labelBoxes: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
     for (const bubble of bubbles) {
       const x = timeToX(bubble.t, start, end, 0, g.dataW);
@@ -928,7 +946,7 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       ctx.arc(x, y, Math.max(1.2, radius), 0, Math.PI * 2);
       ctx.stroke();
       if (ringBubbles.has(bubble)) {
-        ctx.strokeStyle = '#fde047';
+        ctx.strokeStyle = '#facc15';
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.arc(x, y, Math.max(2, radius + 1.2), 0, Math.PI * 2);
@@ -936,68 +954,70 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       }
 
       const deltaRatio = Math.abs(bubble.buyUsd - bubble.sellUsd) / Math.max(1e-9, bubble.usd);
-      if (bubble.usd >= 250_000 && deltaRatio >= 0.6) {
+      if (bubble.usd >= BUBBLE_LABEL_USD && deltaRatio >= 0.6) {
         drawChevron(
           ctx,
           x,
           y + (bubble.buyUsd >= bubble.sellUsd ? -radius - 11 : radius + 11),
           bubble.buyUsd >= bubble.sellUsd,
-          bubble.buyUsd >= bubble.sellUsd ? '#86efac' : '#fda4af',
+          bubble.buyUsd >= bubble.sellUsd ? '#86efac' : '#f87185',
         );
       }
 
       if (labelBubbles.has(bubble)) {
         const label = fmtUsd(bubble.usd);
-        ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+        ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
         const tw = ctx.measureText(label).width;
         const lx = clampNumber(x - tw / 2, 2, g.dataRight - tw - 2);
-        let ly = y - radius - 18;
-        if (ly < g.top + 12) ly = y + radius + 8;
-        const box = { x1: lx - 3, y1: ly - 11, x2: lx + tw + 3, y2: ly + 2 };
+        let ly = y - radius - 9;
+        if (ly < g.top + 12) ly = y + radius + 15;
+        const box = { x1: lx - 3, y1: ly - 12, x2: lx + tw + 3, y2: ly + 3 };
         if (!labelBoxes.some((used) => box.x1 < used.x2 && box.x2 > used.x1 && box.y1 < used.y2 && box.y2 > used.y1)) {
           labelBoxes.push(box);
-          ctx.fillStyle = 'rgba(5,7,13,0.76)';
-          roundedRect(ctx, box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1, 2);
-          ctx.fill();
-          ctx.fillStyle = '#fef3c7';
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.95)';
+          ctx.shadowBlur = 4;
+          ctx.fillStyle = '#ffffff';
           ctx.textAlign = 'left';
           ctx.fillText(label, lx, ly);
+          ctx.restore();
         }
       }
     }
 
-    // Liquidity events: green additions and filled pulled-level marks.
+    // Liquidity events: the reference only keeps the last 30 seconds.
+    const eventFloor = end - LIQ_EVENT_WINDOW_MS;
     ctx.font = '700 12px ui-monospace, SFMono-Regular, Menlo, monospace';
     for (const add of additions) {
-      if (add.t < start || add.t > end) continue;
+      if (add.t < Math.max(start, eventFloor) || add.t > end) continue;
       const x = timeToX(add.t, start, end, 0, g.dataW);
       const y = priceToY(add.price, priceMin, priceMax, g.top, g.plotH);
-      if (x < 3 || x > g.dataRight - 3 || y < g.top || y > g.plotBottom) continue;
-      ctx.strokeStyle = 'rgba(34,197,94,0.9)';
-      ctx.lineWidth = 1.5;
+      if (x < 5 || x > g.dataRight - 5 || y < g.top || y > g.plotBottom) continue;
+      ctx.strokeStyle = 'rgba(34,197,94,0.95)';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(x - 4, y);
-      ctx.lineTo(x + 4, y);
-      ctx.moveTo(x, y - 4);
-      ctx.lineTo(x, y + 4);
+      ctx.moveTo(x - 5, y);
+      ctx.lineTo(x + 5, y);
+      ctx.moveTo(x, y - 5);
+      ctx.lineTo(x, y + 5);
       ctx.stroke();
     }
     for (const pull of pulls) {
-      if (pull.t < start || pull.t > end) continue;
+      if (pull.t < Math.max(start, eventFloor) || pull.t > end) continue;
       const x = timeToX(pull.t, start, end, 0, g.dataW);
       const y = priceToY(pull.price, priceMin, priceMax, g.top, g.plotH);
-      if (x < 4 || x > g.dataRight - 4 || y < g.top || y > g.plotBottom) continue;
-      ctx.fillStyle = pull.side === 'bid' ? 'rgba(34,197,94,0.92)' : 'rgba(239,68,68,0.92)';
+      if (x < 7 || x > g.dataRight - 7 || y < g.top || y > g.plotBottom) continue;
+      ctx.fillStyle = pull.side === 'bid' ? 'rgba(34,197,94,0.95)' : 'rgba(239,68,68,0.95)';
       ctx.beginPath();
-      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#e5e7eb';
-      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(x - 2, y - 2);
-      ctx.lineTo(x + 2, y + 2);
-      ctx.moveTo(x + 2, y - 2);
-      ctx.lineTo(x - 2, y + 2);
+      ctx.moveTo(x - 3, y - 3);
+      ctx.lineTo(x + 3, y + 3);
+      ctx.moveTo(x + 3, y - 3);
+      ctx.lineTo(x - 3, y + 3);
       ctx.stroke();
     }
     ctx.textAlign = 'left';
@@ -1005,8 +1025,9 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
 
     // Legend: a real ramp plus the measured thresholds behind it.
     const legendY = g.top + 7;
+    const legendW = Math.min(540, Math.max(300, g.dataW - 14));
     ctx.fillStyle = 'rgba(5,7,13,0.72)';
-    roundedRect(ctx, 7, legendY, 300, 54, 4);
+    roundedRect(ctx, 7, legendY, legendW, 54, 4);
     ctx.fill();
     const ramp = ctx.createLinearGradient(13, 0, 153, 0);
     for (let i = 0; i <= 10; i++) ramp.addColorStop(i / 10, heatColor(i / 10, 1));
@@ -1018,16 +1039,18 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(
-      thresholds.cells > 0 ? `${fmtUsd(thresholds.low)} \u2026 ${fmtUsd(thresholds.max)}+ resting` : 'no recorded resting size',
+      thresholds.cells > 0
+        ? `${fmtUsd(thresholds.low)} \u2026 ${fmtUsd(thresholds.max)}+ resting`
+        : 'no recorded resting size',
       160,
       legendY + 14,
     );
     const cadence = resolutionLabel.startsWith('MOCK')
       ? '2-second'
-      : resolutionLabel.includes('3 s') ? '3-second' : '1-second';
+      : bookCadenceLabel(settings.span);
     const bubbleStep = Math.round(stepMsFor(spanMs, settings.stepMode) / 1_000);
     ctx.fillStyle = '#7c8797';
-    ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.fillText(`${cadence} book columns \u00b7 bubbles every ${bubbleStep}s`, 13, legendY + 38);
 
     // Bottom time axis, full width, local 24-hour labels.
@@ -1035,12 +1058,12 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
     ctx.fillRect(0, g.timeTop, g.w, TIME_H);
     ctx.fillStyle = 'rgba(148,163,184,0.14)';
     ctx.fillRect(0, g.timeTop, g.w, 1);
-    ctx.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let t = firstTick; t <= end; t += timeStep) {
       const x = timeToX(t, start, end, 0, g.dataW);
-      if (x < 18 || x > g.dataW - 18) continue;
+      if (x < 22 || x > g.dataW - 22) continue;
       ctx.fillStyle = '#6b7280';
       ctx.fillText(tickLabel(t), x, g.timeTop + TIME_H / 2);
       ctx.strokeStyle = 'rgba(148,163,184,0.18)';
@@ -1076,15 +1099,31 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       hoverPrice: null,
     });
 
+    // The last-price line runs across the heatmap and the columns, into the
+    // axis. The current row gets a thin white outline inside the heatmap.
+    if (currentPrice > 0) {
+      const row = rowIndexForPrice(currentPrice, priceMin, priceMax, g.rows);
+      const rowY = g.top + row * g.rowH;
+      ctx.strokeStyle = 'rgba(255,255,255,0.88)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, rowY + 0.5, Math.max(0, g.dataW - 1), Math.max(1, g.rowH - 1));
+      ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+      ctx.beginPath();
+      ctx.moveTo(0, Math.round(midY) + 0.5);
+      ctx.lineTo(g.axisX, Math.round(midY) + 0.5);
+      ctx.stroke();
+    }
+
     if (hover) {
       const { x, y } = hover;
-      ctx.strokeStyle = 'rgba(229,231,235,0.5)';
+      ctx.strokeStyle = 'rgba(229,231,235,0.55)';
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 4]);
       ctx.beginPath();
       ctx.moveTo(Math.round(x) + 0.5, g.top);
       ctx.lineTo(Math.round(x) + 0.5, g.timeTop);
       ctx.stroke();
+      ctx.strokeStyle = 'rgba(229,231,235,0.35)';
       ctx.beginPath();
       ctx.moveTo(0, Math.round(y) + 0.5);
       ctx.lineTo(g.axisX, Math.round(y) + 0.5);
@@ -1097,10 +1136,10 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       }
       if (hover.price > 0) {
         const label = priceText(hover.price, priceMin);
-        ctx.font = '700 10px ui-monospace, SFMono-Regular, Menlo, monospace';
-        const width = Math.max(g.axisW - 6, ctx.measureText(label).width + 8);
-        ctx.fillStyle = '#e5e7eb';
-        roundedRect(ctx, g.axisX + 3, y - 8, width, 16, 3);
+        ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+        const width = Math.max(82, Math.min(g.axisW - 4, ctx.measureText(label).width + 12));
+        ctx.fillStyle = '#ffffff';
+        roundedRect(ctx, g.axisX + 3, y - 10, width, 20, 3);
         ctx.fill();
         ctx.fillStyle = '#05070d';
         ctx.textAlign = 'center';
@@ -1108,16 +1147,16 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
         ctx.fillText(label, g.axisX + 3 + width / 2, y);
       }
       const timeLabel = localClock(hover.time);
-      ctx.font = '700 9px ui-monospace, SFMono-Regular, Menlo, monospace';
-      const tw = ctx.measureText(timeLabel).width + 10;
+      ctx.font = '700 11px ui-monospace, SFMono-Regular, Menlo, monospace';
+      const tw = ctx.measureText(timeLabel).width + 12;
       const tx = clampNumber(x - tw / 2, 2, g.dataRight - tw - 2);
-      ctx.fillStyle = '#e5e7eb';
-      roundedRect(ctx, tx, g.timeTop + 3, tw, 15, 2);
+      ctx.fillStyle = '#ffffff';
+      roundedRect(ctx, tx, g.timeTop + 2, tw, 18, 2);
       ctx.fill();
       ctx.fillStyle = '#05070d';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(timeLabel, tx + tw / 2, g.timeTop + 10.5);
+      ctx.fillText(timeLabel, tx + tw / 2, g.timeTop + 11);
       ctx.textBaseline = 'alphabetic';
     }
 
@@ -1200,10 +1239,13 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
       const rect = el.getBoundingClientRect();
       const x = event.clientX - rect.left;
       const y = event.clientY - rect.top;
-      if (x > g.dataRight || y < g.top || y > g.plotBottom) return;
+      const overPrice = x >= g.dataRight && x < g.axisX + g.axisW;
+      const overPlot = x <= g.dataRight && y >= g.top && y <= g.plotBottom;
+      const priceZoom = event.shiftKey || event.ctrlKey || event.metaKey || overPrice;
+      if (!priceZoom && !overPlot) return;
       event.preventDefault();
       const view = viewRef.current;
-      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      if (priceZoom) {
         const center = (view.priceMin + view.priceMax) / 2;
         const span = view.priceMax - view.priceMin;
         const factor = event.deltaY > 0 ? 1.15 : 0.87;
@@ -1253,19 +1295,30 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
         if (distance <= Math.max(6, radius) && distance < best) { best = distance; bubble = candidate; }
       }
       let pull: PullEvent | null = null;
-      let bestPull = 7;
+      let bestPull = 9;
+      const eventFloor = end - LIQ_EVENT_WINDOW_MS;
       for (const candidate of pulls) {
-        if (candidate.t < start || candidate.t > end) continue;
+        if (candidate.t < Math.max(start, eventFloor) || candidate.t > end) continue;
         const px = timeToX(candidate.t, start, end, 0, g.dataW);
         const py = priceToY(candidate.price, priceMin, priceMax, g.top, g.plotH);
         const distance = Math.hypot(px - x, py - y);
         if (distance < bestPull) { bestPull = distance; pull = candidate; }
+      }
+      let add: LiquidityAdd | null = null;
+      let bestAdd = 8;
+      for (const candidate of additions) {
+        if (candidate.t < Math.max(start, eventFloor) || candidate.t > end) continue;
+        const ax = timeToX(candidate.t, start, end, 0, g.dataW);
+        const ay = priceToY(candidate.price, priceMin, priceMax, g.top, g.plotH);
+        const distance = Math.hypot(ax - x, ay - y);
+        if (distance < bestAdd) { bestAdd = distance; add = candidate; }
       }
       setHover({
         x, y, price, time,
         cell: cellAt(shown, time, row, priceMin, priceMax, g.rows),
         bubble,
         pull,
+        add,
         columnKey: null,
         columnLow: null,
         columnHigh: null,
@@ -1296,6 +1349,7 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
         cell: null,
         bubble: null,
         pull: null,
+        add: null,
         columnKey: key,
         columnLow: bottomPrice,
         columnHigh: topPrice,
@@ -1406,7 +1460,11 @@ export function HeatmapCanvas(props: HeatmapCanvasProps) {
           onPointerDown={(event) => event.stopPropagation()}
         >
           <div className="heatmap-menu__price">{priceText(menu.price, priceMin)}</div>
-          <button type="button" onClick={() => { onToggleUserLevel(menu.price); setMenu(null); }}>Add / remove level</button>
+          <button type="button" onClick={() => { onToggleUserLevel(menu.price); setMenu(null); }}>
+            {userLevels.some((level) => Math.abs(level - menu.price) <= 10 ** -priceDecimals(priceMin) / 2)
+              ? 'Remove my level'
+              : 'Add my level here'}
+          </button>
           <button type="button" onClick={() => { setPriceScale(null); setViewEnd(null); setZoom(1); setMenu(null); }}>Reset view</button>
           <button type="button" onClick={() => { void navigator.clipboard?.writeText(menu.price.toFixed(priceDecimals(priceMin))); setMenu(null); }}>Copy price</button>
         </div>
